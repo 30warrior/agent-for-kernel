@@ -26,6 +26,12 @@ Orchestrator、CodeGenerator、CorrectnessTester、Benchmarker、OptimizationStr
 均在本地运行，并沿用既有迭代逻辑。`--executor ssh` 将编译和执行工具切到服务器；
 `--executor local` 保留本机模式。清单批量运行也支持这些参数，每个任务串行创建独立工作区。
 
+每次运行选择一个编译目标，默认 `--target neon`，不会同时生成 NEON 和 SVE 两套源码。
+切换为 `--target sve`（启动脚本用 `-Target sve`）即可用同一多 agent 流程生成 SVE：
+提示要求 `<arm_sve.h>`、运行时 lane 数和 predicate，编译使用
+`-march=armv8.2-a+sve -msve-vector-bits=scalable`。NEON 使用 `<arm_neon.h>` 和
+`-march=armv8-a+simd`。两种目标各自保存运行目录和评测结果。
+
 任务的 `Model`、`get_inputs` / `get_inputs_dyn_list` 和 `get_init_inputs` 在服务器执行。
 `reference.pt` 中的输入、模型状态、期望输出和输入修改结果留在服务器，整个运行复用同一个快照。
 本地不导入 PyTorch，不进行交叉编译，也不需要下载 Arm 的依赖。
@@ -176,9 +182,50 @@ NEON 内循环每次处理 16 个 FP32 元素，并保留通用 stride/broadcast
 
 本次 v2 相对 v1 提升约 **46.92 倍**，相对 PyTorch 的速度比是 **0.888 倍**，尚未超过参考实现。
 这是单个 Add case 的连通性与正确性验证，10 次采样不能作为完整性能结论。
-本次实际 LLM 生成只验证了 NEON；SVE 此前只验证了手写示例，CUDA 仍未实测。
+上面这次 LLM 生成运行针对 NEON；SVE 的真实生成验证见下一节，CUDA 仍未实测。
 
 本地结果目录：`optimization_runs/20261115_211131_699989/`。
 查看 `v1/kernel.cpp`、`v2/kernel.cpp`、`v1/suggestions.txt`、`progress.json`、
 `benchmark_results.json` 和两个 CSV，可追踪实际反馈过程。该目录的 `remote.json`
 标明服务器工作区。密钥、服务地址配置和原始运行产物不提交到 Git。
+
+## 实际 SVE 生成与反馈优化（2026-11-15）
+
+使用同一 AKG Add 任务和 `gpt-6.1-sol`，仅切换为 `--target sve`，再次完成
+Orchestrator、CodeGenerator、CorrectnessTester、Benchmarker、OptimizationStrategist
+的真实运行，包括 v1 生成和一轮反馈后生成 v2。输入仍为 FP32 `[16, 2048]` 与 `[1, 2048]`，
+默认单核单线程、预热 3 次、采样 10 次。没有提供手写初始 kernel，也未手动修改候选源码。
+
+| 对象 | 编译 | 正确性 | 中位延迟 |
+| --- | --- | --- | ---: |
+| 本次 PyTorch 参考 | 不适用 | 参考 | 10.1055 μs |
+| LLM SVE v1 | 通过 | 通过 | 14.4550 μs |
+| 反馈后的 LLM SVE v2 | 通过 | 通过 | 14.1900 μs |
+
+这次第二版添加了连续矩阵与广播行的路径，减少热循环中的索引重建和 stride 查询。
+两版源码均使用 `<arm_sve.h>`、`svcntw()`、`svwhilelt_b32`、`svld1`、`svadd_f32_x` 和 `svst1`，
+编译使用 `-march=armv8.2-a+sve -msve-vector-bits=scalable`。
+还实际读取了两版共享库的反汇编，均确认存在 SVE 的 predicate 和 `z` 寄存器指令，例如：
+
+```asm
+whilelo p0.s, x0, x3
+ld1w    {z1.s}, p0/z, [x2, x0, lsl #2]
+fadd    z0.s, p0/m, z0.s, z1.s
+st1w    {z0.s}, p0, [x4, x0, lsl #2]
+```
+
+本地结果目录为 `optimization_runs/20261115_213504_389112/`，两版各有
+`kernel.cpp`、`model.py`、`remote_build.json`、`verify.json`、`benchmark.json`
+和 `sve_instruction_check.json`；运行目录保存既有 JSON/CSV 汇总及完整反馈。
+
+本次速度比为 v2 / PyTorch 的 **0.712 倍**，尚未超过基线。
+v2 相比 v1 的延迟只降低约 1.8%，在 10 次采样下不能据此认定有稳定性能提升。
+本次验证确认了 SVE 的实际生成、编译、数值正确性、计时和反馈流程；
+未覆盖其他任务、其他向量长度或 CUDA。NEON 与 SVE 的数字来自各自的独立运行。
+
+在本地复用同一流程选择 SVE：
+
+```powershell
+.\run_remote.ps1 -Python .\.venv\Scripts\python.exe -Target sve `
+  -Model gpt-6.1-sol -ModelApi responses -MaxIterations 1
+```
