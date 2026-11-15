@@ -18,7 +18,7 @@ This branch contains the migration in separate, ordered commits:
 7. Share the multi-agent refinement workflow across generation targets.
 8. Report reference speedup, refinement speedup and batch task outcomes.
 
-Only step 1 is implemented at this commit. Dataset execution and Arm generation
+Steps 1 and 2 are implemented at this commit. Dataset execution and Arm generation
 are not yet available; do not treat the existing CUDA entry point as CPU-ready.
 
 ## Dependencies
@@ -41,3 +41,13 @@ examples. They are not the new dataset runner and may require optional libraries
 All Arm development is confined to `hzh/Astra`. Existing shared Python environments
 and other users' directories must not be modified. Generated sources, build
 artifacts, reports and local environment files must not be committed.
+
+## Inspect dataset definitions
+
+`python kernel_optimizer.py --dataset akg --dataset-root /path/to/akg_kernels_bench --list-tasks`
+
+`python kernel_optimizer.py --dataset kernelbench --dataset-root /path/to/KernelBench/KernelBench --list-tasks`
+
+Listing reads Python syntax only. It does not establish CPU compatibility or
+run correctness checks. Select explicit task paths; accelerator-specific tasks
+must be excluded from CPU manifests. Dynamic AKG tasks use get_inputs_dyn_list.
