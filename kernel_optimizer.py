@@ -19,7 +19,7 @@ def build_parser():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--trials", type=int, default=30)
-    parser.add_argument("--generate-only", action="store_true", help="Generate v1 sources from the task; makes LLM requests")
+    parser.add_argument("--generate-only", action="store_true", help="Generate v1 sources and expose compilation tools; makes LLM requests")
     parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
     parser.add_argument("--base-url", default=os.environ.get("OPENAI_BASE_URL"))
     parser.add_argument("--model", default="o4-mini")
@@ -33,12 +33,12 @@ def build_parser():
     parser.add_argument("--cpu-core", type=int, help="CPU affinity; defaults to the first allowed core for CPU targets")
     parser.add_argument("--max-iterations", type=int, default=3, help="Refinement rounds after v1; zero generates and evaluates v1 only")
     parser.add_argument("--execution-timeout", type=int, default=300)
+    parser.add_argument("--manifest", help="JSON task list; runs complete workflows serially")
+    parser.add_argument("--result-file", help=argparse.SUPPRESS)
     return parser
 
 
-def main():
-    parser = build_parser()
-    args = parser.parse_args()
+def execute_task(args, parser):
     if args.max_iterations < 0 or args.trials < 1 or args.warmup < 0:
         parser.error("max-iterations/warmup must be nonnegative and trials positive")
     if args.compile_timeout <= 0 or args.execution_timeout <= 0 or args.max_agent_turns < 1:
@@ -49,8 +49,13 @@ def main():
         for task in list_tasks(args.dataset, args.dataset_root):
             print(json.dumps(task.metadata(), ensure_ascii=False))
         return 0
+    if args.manifest:
+        if args.task or args.prepare_only or args.generate_only or args.evaluate_only:
+            parser.error("--manifest runs complete workflows and cannot be combined with --task or *-only")
+        from astra.batch import run_batch
+        return run_batch(args)
     if not args.task:
-        parser.error("--task is required unless --list-tasks is selected")
+        parser.error("--task is required unless --list-tasks or --manifest is selected")
     if sum(bool(value) for value in (args.prepare_only, args.generate_only, args.evaluate_only)) > 1:
         parser.error("prepare-only, generate-only and evaluate-only are mutually exclusive")
     if not args.prepare_only and not args.evaluate_only and not args.api_key:
@@ -96,8 +101,38 @@ def main():
                            compiler=backend.compile_feedback)
         return 0
     from astra.workflow import run
-    result = run(task, reference, baseline, folder, args, llm)
-    return 0 if result["best_version"] else 1
+    from astra.reports import write_reports
+    result = run(task, reference, baseline, folder, args, llm,
+                 on_update=lambda payload: write_reports(payload, folder))
+    summary = write_reports(result, folder)
+    summary.update(status="completed" if summary["success"] else "failed", run_directory=str(folder))
+    if args.result_file:
+        from astra.reports import atomic_write
+        atomic_write(Path(args.result_file), json.dumps(summary, indent=2))
+    print(json.dumps(summary, indent=2))
+    return 0 if summary["success"] else 1
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.result_file:
+        result_file = Path(args.result_file).resolve()
+        project = Path(__file__).resolve().parent
+        if project not in result_file.parents or not result_file.parent.is_dir():
+            parser.error("Result file must be inside an existing project directory")
+    try:
+        return execute_task(args, parser)
+    except BrokenPipeError:
+        return 0
+    except Exception as error:
+        import traceback
+        details = traceback.format_exc()
+        if args.result_file:
+            from astra.reports import atomic_write
+            atomic_write(Path(args.result_file), json.dumps(dict(status="error", success=False, error=details), indent=2))
+        print(details, file=__import__("sys").stderr)
+        return 1
 
 
 if __name__ == "__main__":

@@ -1,0 +1,8 @@
+{
+  "tasks": [
+    "static_shape/elemwise/elemwise_add_001.py",
+    "static_shape/reduction/reduction_sum_001.py",
+    "static_shape/norm/norm_rms.py",
+    "static_shape/fused/fused_silu_and_mul.py"
+  ]
+}

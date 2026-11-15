@@ -37,8 +37,11 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None):
 
     orchestrator = Agent(name="Orchestrator", model=llm.model, tools=[record_plan],
                          instructions="Plan this task's native kernel optimization. Use record_plan; prioritize correctness, target ISA and fixed-case performance. Do not change task semantics or cases.")
-    planner = Runner.run_sync(orchestrator, json.dumps(context, default=str), max_turns=llm.max_turns)
-    (folder / "orchestrator.txt").write_text(str(planner.final_output))
+    try:
+        planner = Runner.run_sync(orchestrator, json.dumps(context, default=str), max_turns=llm.max_turns)
+        (folder / "orchestrator.txt").write_text(str(planner.final_output))
+    except Exception as error:
+        (folder / "orchestrator_error.txt").write_text(str(error))
     strategist = Agent(name="OptimizationStrategist", model=llm.model,
                        instructions="Give concrete native-kernel optimization or repair suggestions, no code. Respect target ISA, dtype, thread count and task semantics. Analyze actual errors/timings, and distinguish measured facts from hypotheses. Never replace measured timings with estimates.")
     previous, feedback = None, None
@@ -52,6 +55,7 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None):
                                previous=previous, feedback=feedback, compiler=backend.compile_feedback)
             source = candidate_dir / ("kernel.cu" if settings.target == "cuda" else "kernel.cpp")
             backend.compile(source, candidate_dir)  # Compilation is required even if the LLM skipped its tool.
+            record["compiled"] = True
             verification = {}
 
             @function_tool
@@ -94,7 +98,8 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None):
             best, best_score = version, current_score
         records.append(record)
         payload = dict(task=task.metadata(), target=settings.target, baseline=baseline,
-                       versions=records, best_version=best, first_candidate_score=first_valid_score)
+                       versions=records, best_version=best, first_candidate_score=first_valid_score,
+                       configuration={key:value for key,value in vars(settings).items() if key not in ("api_key", "result_file")})
         temporary = folder / ".progress.tmp"
         temporary.write_text(json.dumps(payload, indent=2))
         temporary.replace(folder / "progress.json")

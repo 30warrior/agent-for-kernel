@@ -18,8 +18,9 @@ This branch contains the migration in separate, ordered commits:
 7. Share the multi-agent refinement workflow across generation targets.
 8. Report reference speedup, refinement speedup and batch task outcomes.
 
-Steps 1 through 7 are implemented at this commit. Dataset execution and Arm generation
-are not yet available; do not treat the existing CUDA entry point as CPU-ready.
+All eight migration steps have code implementations. They have received static
+checks only; no native-kernel benchmark or LLM run has been performed during this
+change. The legacy CUDA entry point is separate from the new workflow.
 
 ## Dependencies
 
@@ -69,7 +70,7 @@ or `v1/kernel.cu` (CUDA) plus `v1/model.py`. This option calls the model; it is 
 a dry run. API settings use `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, `--model`
 and `--model-api`. Tracing is disabled unless explicitly enabled. Secrets are
 not written into run metadata. The ModelNew wrapper contract is recorded in
-`astra/generation.py`; subsequent commits connect compilation and refinement.
+`astra/generation.py`; compilation and refinement are connected by the shared workflow.
 
 ## Native compilation
 
@@ -107,3 +108,58 @@ Progress is saved after each attempted version. Candidate execution uses subproc
 with --execution-timeout so a segfault or hang is recorded as a failure. Compiler and
 execution timeouts are separate. Task inputs and reference weights are restored from
 the same run snapshot in evaluation workers; only the reference device is used.
+
+## Run a selected task on Arm
+
+```bash
+cd /mnt/data_nvme4n1/lab317_cnndev/hzh/Astra
+export PYTHONDONTWRITEBYTECODE=1
+# Install dependencies into a project-local environment if needed; shared envs are read-only.
+# Supply OPENAI_API_KEY through the environment. Never commit it.
+python -B kernel_optimizer.py --dataset akg --dataset-root benchmarks/akg \
+  --task static_shape/elemwise/elemwise_add_001.py --target sve \
+  --model YOUR_MODEL --model-api chat_completions --max-iterations 3
+```
+
+Use `--target neon` for NEON. On a CUDA host, use `--target cuda` and a CUDA-enabled
+PyTorch build. For KernelBench use `--dataset kernelbench --dataset-root benchmarks/kernelbench`.
+The bundled datasets retain their original sources/licenses and are not all CPU-compatible;
+see benchmarks/PROVENANCE.md and SHA256SUMS.json. The supplied four-task manifest is a
+starting selection, not a claim that generated code has passed validation.
+
+## Batch runs and reports
+
+```bash
+python -B kernel_optimizer.py --dataset akg --dataset-root benchmarks/akg \
+  --manifest manifests/akg_fp32.json --target sve --model YOUR_MODEL
+```
+
+A manifest contains a `tasks` list of relative paths. An object entry can use
+`{"task": "path.py", "skip_reason": "explicit reason"}` to declare a skip. Runs are
+serial; failures remain visible and do not stop later tasks. No benchmark has been
+run merely by copying/listing the dataset.
+
+Each run atomically updates benchmark_results.json, summary.json,
+benchmark_summary.csv and benchmark_details.csv after every attempted candidate.
+Per-case CPU latency is the median of host-clock samples; GPU latency is the median
+of CUDA-event samples. Version ranking uses the mean of per-case medians on the
+same complete case set. Aggregate reference speedup is sum(reference medians) /
+sum(candidate medians); refinement speedup uses v1's sum instead. If v1 is invalid,
+refinement speedup remains empty. Incorrect or incompletely measured candidates
+cannot win. Each case has its own ID, even if shapes match.
+
+Batch reports include compile rate, correctness rate and fast_1 (correct, completely
+measured tasks faster than their reference). Denominators include failed attempted
+tasks; declared skips are reported separately and excluded. The geometric mean is
+explicitly limited to successful tasks and must be read alongside coverage. CPU and
+GPU results are evaluated against their own native references, not each other's times.
+
+## Validation status and boundaries
+
+No unit tests, native compilation, generated kernels or model calls were run during
+implementation at the user's request. Python source parsing, CLI help, dataset
+interface listing, diff checks and source snapshot checksums can be reviewed without
+running kernels. End-to-end correctness/performance on Arm and CUDA remains to be
+validated in the intended environments. CPU execution currently supports single-thread
+inference. Additional edge shapes, thread scaling, stronger numerical stress testing,
+repeatability across hardware, and RAG are later work; no performance gain is claimed.

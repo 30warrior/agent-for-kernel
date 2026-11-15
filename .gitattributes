@@ -1,0 +1,2 @@
+benchmarks/akg/** -text -whitespace
+benchmarks/kernelbench/** -text -whitespace
