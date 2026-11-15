@@ -18,7 +18,7 @@ This branch contains the migration in separate, ordered commits:
 7. Share the multi-agent refinement workflow across generation targets.
 8. Report reference speedup, refinement speedup and batch task outcomes.
 
-Steps 1 through 5 are implemented at this commit. Dataset execution and Arm generation
+Steps 1 through 6 are implemented at this commit. Dataset execution and Arm generation
 are not yet available; do not treat the existing CUDA entry point as CPU-ready.
 
 ## Dependencies
@@ -81,3 +81,16 @@ saved per candidate. Compilation runs in a subprocess with a process-group timeo
 directory. C++ headers/toolchain matching the installed PyTorch build are required.
 Generated code is executable native/Python code and runs as the current account;
 this implementation does not provide a security sandbox for untrusted tasks.
+
+## Candidate evaluation
+
+Use `--evaluate-only optimization_runs/<run>/v1` with the same task and target to
+compile and check saved sources without model calls. Tensor shape, dtype, device,
+sequence/dictionary outputs and post-call input mutations are checked. Floating
+outputs use dtype-specific tolerances (overridable with --rtol/--atol); integer and
+boolean results are exact. Matching NaNs are allowed; infinity signs must match.
+Only candidates passing every case are timed. CPU runs use one thread and pin to
+the first allowed logical CPU by default; override it with --cpu-core. Cases are
+pre-cloned and model state restored before timing. Output allocations and wrapper
+call overhead remain inside the boundary on CPU; CUDA events measure stream time.
+CPU and CUDA numbers are not directly compared to one another.

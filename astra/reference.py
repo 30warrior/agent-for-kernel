@@ -3,6 +3,7 @@ import copy
 import hashlib
 import importlib.util
 import random
+import os
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -92,6 +93,7 @@ def prepare_reference(task, target, seed=42, threads=1):
         mutated.append(clone_inputs(inputs))
     metadata = dict(task.metadata(), target=target, seed=seed, threads=threads,
                     mode="eval/inference", torch_version=torch.__version__,
+                    affinity=sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
                     init_inputs=describe(init), cases=[describe(case) for case in cases],
                     outputs=[describe(output) for output in expected])
     return Reference(model, cases, expected, mutated, metadata)

@@ -15,7 +15,7 @@ def build_parser():
     parser.add_argument("--target", choices=("cuda", "neon", "sve"), default="neon")
     parser.add_argument("--list-tasks", action="store_true", help="List definitions without importing tasks or running kernels")
     parser.add_argument("--prepare-only", action="store_true", help="Prepare and benchmark the PyTorch reference; no LLM calls")
-    parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument("--threads", type=int, choices=(1,), default=1, help="Initial CPU backend is single-threaded")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--trials", type=int, default=30)
@@ -27,6 +27,10 @@ def build_parser():
     parser.add_argument("--enable-tracing", action="store_true", help="Opt in to SDK trace uploads")
     parser.add_argument("--max-agent-turns", type=int, default=12)
     parser.add_argument("--compile-timeout", type=int, default=300)
+    parser.add_argument("--evaluate-only", metavar="CANDIDATE_DIR", help="Compile and evaluate saved kernel/model.py sources without LLM requests")
+    parser.add_argument("--rtol", type=float)
+    parser.add_argument("--atol", type=float)
+    parser.add_argument("--cpu-core", type=int, help="CPU affinity; defaults to the first allowed core for CPU targets")
     return parser
 
 
@@ -40,7 +44,13 @@ def main():
     if not args.task:
         parser.error("--task is required unless --list-tasks is selected")
     task = load_task(args.dataset, args.dataset_root, args.task)
-    if args.prepare_only or args.generate_only:
+    if args.prepare_only or args.generate_only or args.evaluate_only:
+        if args.target != "cuda" and hasattr(os, "sched_getaffinity"):
+            allowed = os.sched_getaffinity(0)
+            core = args.cpu_core if args.cpu_core is not None else min(allowed)
+            if core not in allowed:
+                parser.error("--cpu-core is outside this process's allowed affinity")
+            os.sched_setaffinity(0, {core})
         from astra.reference import prepare_reference, save_reference
         from astra.timing import measure
         from astra.backends import Backend
@@ -58,6 +68,19 @@ def main():
                                args.enable_tracing, args.max_agent_turns)
             configure_llm(config)
             generate_candidate(task, reference.metadata, args.target, folder / "v1", config, compiler=backend.compile_feedback)
+        if args.evaluate_only:
+            from astra.evaluation import evaluate
+            candidate_dir = Path(args.evaluate_only).resolve()
+            project = Path(__file__).resolve().parent
+            if project not in candidate_dir.parents:
+                parser.error("Candidate directory must be inside this project")
+            source = candidate_dir / ("kernel.cu" if args.target == "cuda" else "kernel.cpp")
+            artifact = backend.compile(source, candidate_dir)
+            candidate = backend.load_candidate(artifact, candidate_dir / "model.py", reference.model)
+            result = evaluate(reference, candidate, args.target, args.warmup, args.trials, args.rtol, args.atol)
+            (folder / "evaluation.json").write_text(json.dumps(result, indent=2))
+            print(folder)
+            return 0 if result["complete"] else 1
         print(folder)
         return 0
     print(json.dumps(task.metadata(), indent=2, ensure_ascii=False))
