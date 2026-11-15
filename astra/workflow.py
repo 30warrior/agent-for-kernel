@@ -18,30 +18,31 @@ def sources(folder, target):
     folder = Path(folder)
     kernel = folder / ("kernel.cu" if target == "cuda" else "kernel.cpp")
     wrapper = folder / "model.py"
-    return dict(kernel=kernel.read_text() if kernel.exists() else "",
-                wrapper=wrapper.read_text() if wrapper.exists() else "")
+    return dict(kernel=kernel.read_text(encoding="utf-8") if kernel.exists() else "",
+                wrapper=wrapper.read_text(encoding="utf-8") if wrapper.exists() else "")
 
 
-def run(task, reference, baseline, folder, settings, llm, on_update=None):
+def run(task, reference, baseline, folder, settings, llm, on_update=None, backend=None, executor=None):
     from agents import Agent, Runner, function_tool
     folder = Path(folder)
-    backend = Backend(settings.target, settings.compile_timeout)
+    backend = backend or Backend(settings.target, settings.compile_timeout)
+    executor = executor or execute
     records, best, best_score, first_valid_score = [], None, None, None
     context = dict(task=task.metadata(), execution=reference.metadata)
 
     @function_tool
     def record_plan(plan: str) -> str:
         """Record the optimization plan for this fixed task and target."""
-        (folder / "plan.txt").write_text(plan)
+        (folder / "plan.txt").write_text(plan, encoding="utf-8")
         return "Plan recorded"
 
     orchestrator = Agent(name="Orchestrator", model=llm.model, tools=[record_plan],
                          instructions="Plan this task's native kernel optimization. Use record_plan; prioritize correctness, target ISA and fixed-case performance. Do not change task semantics or cases.")
     try:
         planner = Runner.run_sync(orchestrator, json.dumps(context, default=str), max_turns=llm.max_turns)
-        (folder / "orchestrator.txt").write_text(str(planner.final_output))
+        (folder / "orchestrator.txt").write_text(str(planner.final_output), encoding="utf-8")
     except Exception as error:
-        (folder / "orchestrator_error.txt").write_text(str(error))
+        (folder / "orchestrator_error.txt").write_text(str(error), encoding="utf-8")
     strategist = Agent(name="OptimizationStrategist", model=llm.model,
                        instructions="Give concrete native-kernel optimization or repair suggestions, no code. Respect target ISA, dtype, thread count and task semantics. Analyze actual errors/timings, and distinguish measured facts from hypotheses. Never replace measured timings with estimates.")
     previous, feedback = None, None
@@ -61,15 +62,15 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None):
             @function_tool
             def verify_candidate() -> str:
                 """Run actual correctness checks on every fixed task case."""
-                verification.update(execute(folder, candidate_dir, "verify", settings))
+                verification.update(executor(folder, candidate_dir, "verify", settings))
                 return json.dumps(verification)
 
             tester = Agent(name="CorrectnessTester", model=llm.model, tools=[verify_candidate],
                            instructions="Call verify_candidate to check this fixed candidate. Do not generate new cases or claim results without the tool.")
             response = Runner.run_sync(tester, "Verify " + version, max_turns=llm.max_turns)
-            (candidate_dir / "correctness_agent.txt").write_text(str(response.final_output))
+            (candidate_dir / "correctness_agent.txt").write_text(str(response.final_output), encoding="utf-8")
             if not verification:
-                verification.update(execute(folder, candidate_dir, "verify", settings))
+                verification.update(executor(folder, candidate_dir, "verify", settings))
             record.update(verification)
             if verification["correctness"] == "passed":
                 measurement = {}
@@ -77,15 +78,15 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None):
                 @function_tool
                 def benchmark_candidate() -> str:
                     """Measure this candidate on all fixed cases, rechecking correctness first."""
-                    measurement.update(execute(folder, candidate_dir, "benchmark", settings))
+                    measurement.update(executor(folder, candidate_dir, "benchmark", settings))
                     return json.dumps(measurement)
 
                 benchmarker = Agent(name="Benchmarker", model=llm.model, tools=[benchmark_candidate],
                                     instructions="Call benchmark_candidate to collect actual timings. Use the fixed task cases, never synthesize measurements.")
                 response = Runner.run_sync(benchmarker, "Benchmark " + version, max_turns=llm.max_turns)
-                (candidate_dir / "benchmark_agent.txt").write_text(str(response.final_output))
+                (candidate_dir / "benchmark_agent.txt").write_text(str(response.final_output), encoding="utf-8")
                 if not measurement:
-                    measurement.update(execute(folder, candidate_dir, "benchmark", settings))
+                    measurement.update(executor(folder, candidate_dir, "benchmark", settings))
                 record.update(measurement)
             record["status"] = "measured" if record["complete"] else "invalid"
         except Exception:
@@ -117,9 +118,9 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None):
         try:
             response = Runner.run_sync(strategist, json.dumps(strategy_input, default=str), max_turns=llm.max_turns)
             feedback = str(response.final_output)
-            (candidate_dir / "suggestions.txt").write_text(feedback)
+            (candidate_dir / "suggestions.txt").write_text(feedback, encoding="utf-8")
         except Exception as error:
             feedback = dict(error=str(error), latest_result=record,
                             instruction="Repair the recorded failure or improve the best valid candidate")
-            (candidate_dir / "strategy_error.txt").write_text(str(error))
+            (candidate_dir / "strategy_error.txt").write_text(str(error), encoding="utf-8")
     return payload

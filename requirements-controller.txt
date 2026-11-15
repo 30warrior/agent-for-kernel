@@ -1,0 +1,2 @@
+# Local controller only; PyTorch/ninja belong on the execution server.
+openai-agents

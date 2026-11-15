@@ -1,5 +1,18 @@
 # Astra: Dataset-driven GPU and Arm CPU Kernel Optimization
 
+This independent copy adds **local LLM orchestration with an offline SSH worker**.
+Windows/Linux/macOS controllers need only Python, `openai-agents`, SSH and SCP.
+The execution server supplies PyTorch, Ninja and the native CPU/CUDA toolchain.
+See [the remote workflow and Windows commands](docs/remote-execution.md).
+
+```powershell
+# No model/API call: upload and evaluate the handwritten NEON Add example.
+.\run_remote.ps1 -Target neon -EvaluateOnly "$PWD/examples/remote_add/neon"
+# Full multi-agent run after installing requirements-controller.txt and setting
+# OPENAI_API_KEY locally (and OPENAI_BASE_URL if using a compatible endpoint).
+.\run_remote.ps1 -Python .\.venv\Scripts\python.exe -Target sve -Model YOUR_MODEL -ModelApi chat_completions
+```
+
 Astra is being extended to generate and iteratively optimize kernels from
 KernelBench and AKG benchmark PyTorch tasks. Planned generation targets are
 CUDA, AArch64 NEON and AArch64 SVE. Each target runs natively on its corresponding
@@ -18,9 +31,10 @@ This branch contains the migration in separate, ordered commits:
 7. Share the multi-agent refinement workflow across generation targets.
 8. Report reference speedup, refinement speedup and batch task outcomes.
 
-All eight migration steps have code implementations. They have received static
-checks only; no native-kernel benchmark or LLM run has been performed during this
-change. The legacy CUDA entry point is separate from the new workflow.
+All eight migration steps have code implementations. The remote-execution branch
+adds native smoke validation, recorded in [the remote workflow](docs/remote-execution.md).
+Actual LLM generation still needs a locally configured API and controller SDK.
+The legacy CUDA entry point is separate from the new workflow.
 
 ## Dependencies
 
@@ -39,7 +53,8 @@ examples. They are not the new dataset runner and may require optional libraries
 
 ## Development environment
 
-All Arm development is confined to `hzh/Astra`. Existing shared Python environments
+Original Arm development is confined to `hzh/Astra`; remote runs use the separate
+`hzh/Astra-remote` directory. Existing shared Python environments
 and other users' directories must not be modified. Generated sources, build
 artifacts, reports and local environment files must not be committed.
 

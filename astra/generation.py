@@ -69,8 +69,8 @@ def generate_candidate(task, reference_metadata, target, folder, config, previou
             return "ERROR: wrapper syntax: " + str(error)
         if not any(isinstance(node, ast.ClassDef) and node.name == "ModelNew" for node in tree.body):
             return "ERROR: wrapper must define ModelNew"
-        kernel_path.write_text(kernel_source)
-        wrapper_path.write_text(wrapper_source)
+        kernel_path.write_text(kernel_source, encoding="utf-8")
+        wrapper_path.write_text(wrapper_source, encoding="utf-8")
         return "Saved candidate sources"
 
     tools = [save_candidate]
@@ -88,9 +88,9 @@ def generate_candidate(task, reference_metadata, target, folder, config, previou
     prompt = dict(task=task.metadata(), reference_source=task.source,
                   execution=reference_metadata, previous_sources=previous, feedback=feedback)
     prompt_text = json.dumps(prompt, indent=2, default=str)
-    (folder / "generation_prompt.json").write_text(prompt_text)
+    (folder / "generation_prompt.json").write_text(prompt_text, encoding="utf-8")
     result = Runner.run_sync(agent, prompt_text, max_turns=config.max_turns)
-    (folder / "generation_response.txt").write_text(str(result.final_output))
+    (folder / "generation_response.txt").write_text(str(result.final_output), encoding="utf-8")
     if not kernel_path.exists() or not wrapper_path.exists():
         raise RuntimeError("CodeGenerator did not save both required sources")
     return kernel_path, wrapper_path
