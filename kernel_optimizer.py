@@ -1,5 +1,6 @@
 """Dataset-driven Astra entry point; imports execution dependencies lazily."""
 import argparse
+import os
 import json
 from pathlib import Path
 from datetime import datetime
@@ -18,6 +19,13 @@ def build_parser():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--trials", type=int, default=30)
+    parser.add_argument("--generate-only", action="store_true", help="Generate v1 sources from the task; makes LLM requests")
+    parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
+    parser.add_argument("--base-url", default=os.environ.get("OPENAI_BASE_URL"))
+    parser.add_argument("--model", default="o4-mini")
+    parser.add_argument("--model-api", choices=("responses", "chat_completions"), default="responses")
+    parser.add_argument("--enable-tracing", action="store_true", help="Opt in to SDK trace uploads")
+    parser.add_argument("--max-agent-turns", type=int, default=12)
     return parser
 
 
@@ -31,7 +39,7 @@ def main():
     if not args.task:
         parser.error("--task is required unless --list-tasks is selected")
     task = load_task(args.dataset, args.dataset_root, args.task)
-    if args.prepare_only:
+    if args.prepare_only or args.generate_only:
         from astra.reference import prepare_reference, save_reference
         from astra.timing import measure
         reference = prepare_reference(task, args.target, args.seed, args.threads)
@@ -39,6 +47,12 @@ def main():
         save_reference(reference, folder)
         baseline = [measure(reference.model, case, args.target, args.warmup, args.trials) for case in reference.cases]
         (folder / "baseline.json").write_text(json.dumps(baseline, indent=2))
+        if args.generate_only:
+            from astra.generation import LLMConfig, configure_llm, generate_candidate
+            config = LLMConfig(args.api_key, args.base_url, args.model, args.model_api,
+                               args.enable_tracing, args.max_agent_turns)
+            configure_llm(config)
+            generate_candidate(task, reference.metadata, args.target, folder / "v1", config)
         print(folder)
         return 0
     print(json.dumps(task.metadata(), indent=2, ensure_ascii=False))

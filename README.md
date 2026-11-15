@@ -18,7 +18,7 @@ This branch contains the migration in separate, ordered commits:
 7. Share the multi-agent refinement workflow across generation targets.
 8. Report reference speedup, refinement speedup and batch task outcomes.
 
-Steps 1 through 3 are implemented at this commit. Dataset execution and Arm generation
+Steps 1 through 4 are implemented at this commit. Dataset execution and Arm generation
 are not yet available; do not treat the existing CUDA entry point as CPU-ready.
 
 ## Dependencies
@@ -61,3 +61,12 @@ The default is single-threaded inference (`eval`), five warmups and thirty sampl
 Files stay under `optimization_runs/` inside this repository. Stateful/stochastic
 training tasks are outside the initial inference contract. Reference snapshots
 are trusted local PyTorch artifacts and must not be loaded from untrusted sources.
+
+## Generate the first candidate
+
+Use `--generate-only` with a selected task to produce `v1/kernel.cpp` (NEON/SVE)
+or `v1/kernel.cu` (CUDA) plus `v1/model.py`. This option calls the model; it is not
+a dry run. API settings use `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, `--model`
+and `--model-api`. Tracing is disabled unless explicitly enabled. Secrets are
+not written into run metadata. The ModelNew wrapper contract is recorded in
+`astra/generation.py`; subsequent commits connect compilation and refinement.
