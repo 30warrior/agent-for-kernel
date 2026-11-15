@@ -11,6 +11,18 @@ import sys
 from pathlib import Path
 
 
+class ExtensionHandle:
+    """Share the immutable native module when candidate model state is copied."""
+    def __init__(self, module):
+        self._module = module
+
+    def __getattr__(self, name):
+        return getattr(self._module, name)
+
+    def __deepcopy__(self, memo):
+        return self
+
+
 class Backend:
     def __init__(self, target, compile_timeout=300):
         if target not in ("cuda", "neon", "sve"):
@@ -116,7 +128,7 @@ class Backend:
         module = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = module
         spec.loader.exec_module(module)
-        model = module.ModelNew(copy.deepcopy(reference), extension)
+        model = module.ModelNew(copy.deepcopy(reference), ExtensionHandle(extension))
         import torch
         if not isinstance(model, torch.nn.Module):
             raise TypeError("ModelNew must be a torch.nn.Module")

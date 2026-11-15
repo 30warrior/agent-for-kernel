@@ -17,6 +17,7 @@ class Task:
     def metadata(self):
         return dict(dataset=self.dataset, task_id=self.task_id,
                     source_path=str(self.path), source_sha256=self.source_hash,
+                    dataset_root=str(self.path.parents[len(Path(self.task_id).parts)-1]),
                     dynamic=self.dynamic)
 
 

@@ -43,7 +43,7 @@ def compare(expected, actual, path="output", rtol=None, atol=None):
         raise AssertionError(path + ": value mismatch")
 
 
-def evaluate(reference, candidate, target, warmup=5, trials=30, rtol=None, atol=None):
+def verify(reference, candidate, target, rtol=None, atol=None):
     records = []
     for index, case in enumerate(reference.cases):
         record = dict(case_id=index, correctness="failed", benchmark=None)
@@ -61,12 +61,22 @@ def evaluate(reference, candidate, target, warmup=5, trials=30, rtol=None, atol=
             record["error"] = traceback.format_exc()[-12000:]
         records.append(record)
     passed = bool(records) and all(record["correctness"] == "passed" for record in records)
-    # Never report a failing candidate as a fast implementation.
-    if passed:
-        for record, case in zip(records, reference.cases):
-            try:
-                record["benchmark"] = measure(copy.deepcopy(candidate), case, target, warmup, trials)
-            except Exception:
-                record["error"] = traceback.format_exc()[-12000:]
-    complete = passed and all(record["benchmark"] is not None for record in records)
-    return dict(correctness="passed" if passed else "failed", complete=complete, cases=records)
+    return dict(correctness="passed" if passed else "failed", complete=False, cases=records)
+
+
+def benchmark(reference, candidate, target, verification, warmup=5, trials=30):
+    result = copy.deepcopy(verification)
+    if result["correctness"] != "passed":
+        return result
+    for record, case in zip(result["cases"], reference.cases):
+        try:
+            record["benchmark"] = measure(copy.deepcopy(candidate), case, target, warmup, trials)
+        except Exception:
+            record["error"] = traceback.format_exc()[-12000:]
+    result["complete"] = bool(result["cases"]) and all(record["benchmark"] is not None for record in result["cases"])
+    return result
+
+
+def evaluate(reference, candidate, target, warmup=5, trials=30, rtol=None, atol=None):
+    return benchmark(reference, candidate, target,
+                     verify(reference, candidate, target, rtol, atol), warmup, trials)

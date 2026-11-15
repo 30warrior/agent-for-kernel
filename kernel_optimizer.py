@@ -31,60 +31,73 @@ def build_parser():
     parser.add_argument("--rtol", type=float)
     parser.add_argument("--atol", type=float)
     parser.add_argument("--cpu-core", type=int, help="CPU affinity; defaults to the first allowed core for CPU targets")
+    parser.add_argument("--max-iterations", type=int, default=3, help="Refinement rounds after v1; zero generates and evaluates v1 only")
+    parser.add_argument("--execution-timeout", type=int, default=300)
     return parser
 
 
 def main():
     parser = build_parser()
     args = parser.parse_args()
+    if args.max_iterations < 0 or args.trials < 1 or args.warmup < 0:
+        parser.error("max-iterations/warmup must be nonnegative and trials positive")
+    if args.compile_timeout <= 0 or args.execution_timeout <= 0 or args.max_agent_turns < 1:
+        parser.error("timeouts and max-agent-turns must be positive")
+    if any(value is not None and value < 0 for value in (args.rtol, args.atol)):
+        parser.error("tolerances must be nonnegative")
     if args.list_tasks:
         for task in list_tasks(args.dataset, args.dataset_root):
             print(json.dumps(task.metadata(), ensure_ascii=False))
         return 0
     if not args.task:
         parser.error("--task is required unless --list-tasks is selected")
+    if sum(bool(value) for value in (args.prepare_only, args.generate_only, args.evaluate_only)) > 1:
+        parser.error("prepare-only, generate-only and evaluate-only are mutually exclusive")
+    if not args.prepare_only and not args.evaluate_only and not args.api_key:
+        parser.error("Set OPENAI_API_KEY or pass --api-key before model generation")
+    if args.target != "cuda" and hasattr(os, "sched_getaffinity"):
+        allowed = os.sched_getaffinity(0)
+        core = args.cpu_core if args.cpu_core is not None else min(allowed)
+        if core not in allowed:
+            parser.error("--cpu-core is outside this process's allowed affinity")
+        os.sched_setaffinity(0, {core})
+    from astra.reference import prepare_reference, save_reference
+    from astra.backends import Backend
+    from astra.timing import measure
     task = load_task(args.dataset, args.dataset_root, args.task)
-    if args.prepare_only or args.generate_only or args.evaluate_only:
-        if args.target != "cuda" and hasattr(os, "sched_getaffinity"):
-            allowed = os.sched_getaffinity(0)
-            core = args.cpu_core if args.cpu_core is not None else min(allowed)
-            if core not in allowed:
-                parser.error("--cpu-core is outside this process's allowed affinity")
-            os.sched_setaffinity(0, {core})
-        from astra.reference import prepare_reference, save_reference
-        from astra.timing import measure
-        from astra.backends import Backend
-        backend = Backend(args.target, args.compile_timeout)
-        hardware = backend.capabilities()
-        reference = prepare_reference(task, args.target, args.seed, args.threads)
-        reference.metadata["hardware"] = hardware
-        folder = Path(__file__).resolve().parent / "optimization_runs" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        save_reference(reference, folder)
-        baseline = [measure(reference.model, case, args.target, args.warmup, args.trials) for case in reference.cases]
-        (folder / "baseline.json").write_text(json.dumps(baseline, indent=2))
-        if args.generate_only:
-            from astra.generation import LLMConfig, configure_llm, generate_candidate
-            config = LLMConfig(args.api_key, args.base_url, args.model, args.model_api,
-                               args.enable_tracing, args.max_agent_turns)
-            configure_llm(config)
-            generate_candidate(task, reference.metadata, args.target, folder / "v1", config, compiler=backend.compile_feedback)
-        if args.evaluate_only:
-            from astra.evaluation import evaluate
-            candidate_dir = Path(args.evaluate_only).resolve()
-            project = Path(__file__).resolve().parent
-            if project not in candidate_dir.parents:
-                parser.error("Candidate directory must be inside this project")
-            source = candidate_dir / ("kernel.cu" if args.target == "cuda" else "kernel.cpp")
-            artifact = backend.compile(source, candidate_dir)
-            candidate = backend.load_candidate(artifact, candidate_dir / "model.py", reference.model)
-            result = evaluate(reference, candidate, args.target, args.warmup, args.trials, args.rtol, args.atol)
-            (folder / "evaluation.json").write_text(json.dumps(result, indent=2))
-            print(folder)
-            return 0 if result["complete"] else 1
-        print(folder)
+    backend = Backend(args.target, args.compile_timeout)
+    hardware = backend.capabilities()
+    reference = prepare_reference(task, args.target, args.seed, args.threads)
+    reference.metadata["hardware"] = hardware
+    folder = Path(__file__).resolve().parent / "optimization_runs" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    save_reference(reference, folder)
+    baseline = [measure(reference.model, case, args.target, args.warmup, args.trials) for case in reference.cases]
+    (folder / "baseline.json").write_text(json.dumps(baseline, indent=2))
+    print("Run directory:", folder, flush=True)
+    if args.prepare_only:
         return 0
-    print(json.dumps(task.metadata(), indent=2, ensure_ascii=False))
-    parser.error("Dataset execution is introduced in the following migration steps; no model request was made")
+    if args.evaluate_only:
+        from astra.execution import execute
+        candidate_dir = Path(args.evaluate_only).resolve()
+        project = Path(__file__).resolve().parent
+        if project not in candidate_dir.parents:
+            parser.error("Candidate directory must be inside this project")
+        source = candidate_dir / ("kernel.cu" if args.target == "cuda" else "kernel.cpp")
+        backend.compile(source, candidate_dir)
+        result = execute(folder, candidate_dir, "benchmark", args)
+        (folder / "evaluation.json").write_text(json.dumps(result, indent=2))
+        return 0 if result["complete"] else 1
+    from astra.generation import LLMConfig, configure_llm, generate_candidate
+    llm = LLMConfig(args.api_key, args.base_url, args.model, args.model_api,
+                    args.enable_tracing, args.max_agent_turns)
+    configure_llm(llm)
+    if args.generate_only:
+        generate_candidate(task, reference.metadata, args.target, folder / "v1", llm,
+                           compiler=backend.compile_feedback)
+        return 0
+    from astra.workflow import run
+    result = run(task, reference, baseline, folder, args, llm)
+    return 0 if result["best_version"] else 1
 
 
 if __name__ == "__main__":

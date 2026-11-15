@@ -18,7 +18,7 @@ This branch contains the migration in separate, ordered commits:
 7. Share the multi-agent refinement workflow across generation targets.
 8. Report reference speedup, refinement speedup and batch task outcomes.
 
-Steps 1 through 6 are implemented at this commit. Dataset execution and Arm generation
+Steps 1 through 7 are implemented at this commit. Dataset execution and Arm generation
 are not yet available; do not treat the existing CUDA entry point as CPU-ready.
 
 ## Dependencies
@@ -94,3 +94,16 @@ the first allowed logical CPU by default; override it with --cpu-core. Cases are
 pre-cloned and model state restored before timing. Output allocations and wrapper
 call overhead remain inside the boundary on CPU; CUDA events measure stream time.
 CPU and CUDA numbers are not directly compared to one another.
+
+## Shared refinement workflow
+
+Without an *-only switch, the entry point runs Orchestrator planning, initial code
+generation, CorrectnessTester, Benchmarker and OptimizationStrategist refinement.
+The host enforces actual compilation/checks/timing even if an agent skips its tool.
+`--max-iterations 3` means v1 plus up to three further candidates; failed candidates
+consume a round and feed repair diagnostics to the next attempt. Valid regressions
+refine from the best valid candidate; invalid sources are repaired directly.
+Progress is saved after each attempted version. Candidate execution uses subprocesses
+with --execution-timeout so a segfault or hang is recorded as a failure. Compiler and
+execution timeouts are separate. Task inputs and reference weights are restored from
+the same run snapshot in evaluation workers; only the reference device is used.
