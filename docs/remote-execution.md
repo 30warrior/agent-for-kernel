@@ -82,6 +82,8 @@ NEON 使用 `vaddq_f32`，SVE 使用运行时 lane 数和尾部 predicate，支�
 ## 实际模型生成与优化
 
 在本地终端设置 `OPENAI_API_KEY`，兼容接口再设置 `OPENAI_BASE_URL`。
+也可以复制 `.env.example` 为本项目 `.env`，填入密钥和 `OPENAI_MODEL`。
+入口会自动读取这三个字段，已经设置的环境变量和显式 CLI 参数优先；不执行文件内的 shell 表达式。
 不要把密钥放在命令行参数、聊天或 Git 中。默认不开启 SDK tracing。
 配置好后运行：
 
@@ -150,3 +152,33 @@ CPU 单线程并固定核，预热 3 次，采样 10 次，延迟为包含 wrapp
 
 首次实跑发现并修复了未激活虚拟环境导致 Ninja 不在 PATH 的问题。
 完整日志保留在本地与 `hzh/Astra-remote/runs/` 对应工作区；原始项目代码未改动。
+
+## 实际 LLM 生成与反馈优化（2026-11-15）
+
+之后通过本地配置的兼容 Responses API，以用户指定的 `gpt-6.1-sol` 完成一次真实运行。
+这次没有提供手写初始 kernel，CodeGenerator 直接从 AKG Add 任务生成源码。
+命令使用 `--target neon --max-iterations 1 --max-agent-turns 12 --warmup 3 --trials 10`，
+其余任务和执行环境与上面的 Add 示例相同。
+
+| 对象 | 编译 | 正确性 | 中位延迟 |
+| --- | --- | --- | ---: |
+| PyTorch 参考 | 不适用 | 参考 | 9.7005 μs |
+| LLM v1 | 通过 | 通过 | 512.5535 μs |
+| 反馈优化后的 LLM v2 | 通过 | 通过 | 10.9250 μs |
+
+五个角色均实际运行：Orchestrator 记录计划；CodeGenerator 保存原生源码和 wrapper 并调用远程编译；
+CorrectnessTester 调用校验工具；Benchmarker 调用测量工具；OptimizationStrategist 读取 v1 的
+真实结果，提出减少广播索引开销的建议，再由 CodeGenerator 生成 v2 并重新评测。
+
+v1 每组元素都进行通用广播坐标重建。v2 为连续矩阵加广播行提供快路径，逐行复用广播输入，
+NEON 内循环每次处理 16 个 FP32 元素，并保留通用 stride/broadcast 路径。
+原生源码使用 NEON 加法，Python wrapper 仅转发 extension 调用，没有调用 PyTorch 加法代替候选计算。
+
+本次 v2 相对 v1 提升约 **46.92 倍**，相对 PyTorch 的速度比是 **0.888 倍**，尚未超过参考实现。
+这是单个 Add case 的连通性与正确性验证，10 次采样不能作为完整性能结论。
+本次实际 LLM 生成只验证了 NEON；SVE 此前只验证了手写示例，CUDA 仍未实测。
+
+本地结果目录：`optimization_runs/20261115_211131_699989/`。
+查看 `v1/kernel.cpp`、`v2/kernel.cpp`、`v1/suggestions.txt`、`progress.json`、
+`benchmark_results.json` 和两个 CSV，可追踪实际反馈过程。该目录的 `remote.json`
+标明服务器工作区。密钥、服务地址配置和原始运行产物不提交到 Git。

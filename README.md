@@ -33,7 +33,8 @@ This branch contains the migration in separate, ordered commits:
 
 All eight migration steps have code implementations. The remote-execution branch
 adds native smoke validation, recorded in [the remote workflow](docs/remote-execution.md).
-Actual LLM generation still needs a locally configured API and controller SDK.
+A real NEON generation/refinement run also passed; measurements and limitations
+are recorded in that guide. New runs need a locally configured API and controller SDK.
 The legacy CUDA entry point is separate from the new workflow.
 
 ## Dependencies

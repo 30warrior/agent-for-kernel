@@ -139,6 +139,8 @@ def execute_task(args, parser):
 
 
 def main():
+    from astra.config import load_environment
+    load_environment(Path(__file__).resolve().parent / ".env")
     parser = build_parser()
     args = parser.parse_args()
     if args.result_file:
