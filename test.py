@@ -172,7 +172,8 @@ class KernelTest(ABC):
         baseline_callable: Callable,
         warmup: int = 20,
         iters: int = 100,
-        nvml_handle: Any = None
+        nvml_handle: Any = None,
+        nvml_note: Optional[str] = None,
     ) -> BenchmarkResult:
         """
         Run benchmark comparing generated vs baseline kernel.
@@ -200,21 +201,30 @@ class KernelTest(ABC):
             gen_caller = self.make_generated_caller(generated_callable)
             base_caller = self.make_baseline_caller(baseline_callable)
             
-            # NVML baseline
+            # Device-wide NVML samples are optional and do not affect CUDA event timing.
             nvml_data = None
-            mem_before = None
-            if nvml_handle is not None:
-                try:
-                    import pynvml
-                    mem_before = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle)
-                except:
-                    nvml_handle = None
             
             # Benchmark generated
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
             gen_stats = time_cuda_kernel(gen_caller, warmup=warmup, iters=iters)
             result.generated_metrics = self._compute_metrics(gen_stats)
+
+            # Sample after the generated kernel, before timing the baseline.
+            if nvml_handle is not None:
+                try:
+                    import pynvml
+                    memory = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle)
+                    util = pynvml.nvmlDeviceGetUtilizationRates(nvml_handle)
+                    nvml_data = {
+                        "gpu_utilization_percent": util.gpu,
+                        "memory_controller_utilization_percent": util.memory,
+                        "memory_used_mb": memory.used / (1024 * 1024),
+                        "memory_utilization_percent": 100.0 * memory.used / memory.total,
+                        "gpu_uuid": pynvml.nvmlDeviceGetUUID(nvml_handle),
+                    }
+                except Exception as exc:
+                    nvml_note = f"NVML sampling unavailable: {type(exc).__name__}: {exc}"
             
             # Benchmark baseline
             torch.cuda.empty_cache()
@@ -227,23 +237,11 @@ class KernelTest(ABC):
                 result.generated_metrics, result.baseline_metrics
             )
             
-            # NVML post
-            if nvml_handle is not None and mem_before is not None:
-                try:
-                    import pynvml
-                    mem_after = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle)
-                    util = pynvml.nvmlDeviceGetUtilizationRates(nvml_handle)
-                    nvml_data = {
-                        "memory_used_mb": (mem_after.used - mem_before.used) / (1024 * 1024),
-                        "gpu_utilization_percent": util.gpu,
-                        "memory_utilization_percent": util.memory
-                    }
-                except:
-                    pass
-            
             result.profiling_data = self._compute_profiling(
                 result.generated_metrics, nvml_data
             )
+            if nvml_note:
+                result.profiling_data["nvml_note"] = nvml_note
             result.status = "success"
             
         except Exception as e:
@@ -342,18 +340,15 @@ class KernelTest(ABC):
         profiling = {}
         actual_bw = gen_metrics.get("bandwidth_gb_s", 0)
         profiling["actual_memory_bandwidth_gb_s"] = actual_bw
-        profiling["theoretical_memory_bandwidth_gb_s"] = actual_bw
-        profiling["memory_bandwidth_efficiency_percent"] = 100.0 if actual_bw > 0 else 0.0
+        profiling["bandwidth_method"] = "estimated_bytes_per_call / CUDA event time (GiB/s)"
+        profiling["nvml_available"] = nvml_data is not None
         
         if nvml_data and "gpu_utilization_percent" in nvml_data:
             profiling["real_gpu_utilization_percent"] = nvml_data["gpu_utilization_percent"]
             profiling["memory_utilization_percent"] = nvml_data.get("memory_utilization_percent", 0)
             profiling["memory_used_mb"] = nvml_data.get("memory_used_mb", 0)
-        else:
-            profiling["real_gpu_utilization_percent"] = 0.0
-        
-        profiling["estimated_occupancy_percent"] = 0.0
-        profiling["arithmetic_intensity_ops_per_byte"] = 0.25
+            profiling["real_memory_controller_utilization_percent"] = nvml_data.get("memory_controller_utilization_percent", 0)
+            profiling["gpu_uuid"] = nvml_data.get("gpu_uuid")
         
         return profiling
     
@@ -863,13 +858,16 @@ class TestCollection:
         generated_callable: Callable,
         baseline_callable: Callable,
         warmup: int = 20,
-        iters: int = 100
+        iters: int = 100,
+        nvml_handle: Any = None,
+        nvml_note: Optional[str] = None,
     ) -> Dict[str, BenchmarkResult]:
         """Run benchmarks for all tests."""
         results = {}
         for name, test in self.tests.items():
             results[name] = test.benchmark(
-                generated_callable, baseline_callable, warmup, iters
+                generated_callable, baseline_callable, warmup, iters,
+                nvml_handle=nvml_handle, nvml_note=nvml_note,
             )
         return results
     

@@ -7,187 +7,66 @@ from typing import Dict, Any, List
 
 
 def format_benchmark_summary(benchmark_data: Dict[str, Any]) -> str:
-    """Format benchmark data for optimization analysis using comprehensive metrics."""
+    """Show measured test cases without inventing hardware profiler metrics."""
     if not benchmark_data or not benchmark_data.get("success"):
         return "No benchmark data available"
-    
-    results = benchmark_data.get("results", {})
-    profiling = benchmark_data.get("profiling", {})
-    
-    if not results:
-        # Explain WHY there are no results using detailed records
-        detailed = benchmark_data.get("detailed_results", {}) or {}
-        stats = benchmark_data.get("summary_stats", {}) or {}
-        lines = ["No performance results available"]
-        if stats:
-            sb = stats.get("successful_benchmarks", 0) or 0
-            fb = stats.get("failed_benchmarks", 0) or 0
-            te = stats.get("total_elements_processed", 0) or 0
-            lines.append(f"- successful_benchmarks={sb}, failed_benchmarks={fb}, total_elements={te}")
-        if detailed:
-            # List a few sample reasons
-            lines.append("- Sample case statuses:")
-            shown = 0
-            for name, rec in detailed.items():
-                status = rec.get("status", "unknown")
-                err = rec.get("error_message", "") or ""
-                lines.append(f"  - {name}: {status}{(' | ' + err[:120]) if err else ''}")
-                shown += 1
-                if shown >= 5:
-                    break
-        return "\n".join(lines)
-    
-    summary = "COMPREHENSIVE CUDA PERFORMANCE ANALYSIS:\n"
-    
-    def _safe_int(x):
-        try:
-            return int(x)
-        except Exception:
-            return x
-    
-    for size, result in sorted(results.items(), key=lambda x: _safe_int(x[0])):
-        time_ms = result.get("mean_time_ms", 0.0) or 0.0
-        throughput = result.get("throughput_elements_per_second", 0.0) or 0.0
-        prof_data = profiling.get(size, {})
-        
-        summary += f"  Size {size}:\n"
-        summary += f"    - Execution Time: {time_ms:.4f}ms\n"
-        summary += f"    - Throughput: {throughput:,.0f} elem/s\n"
-        
-        # Memory performance metrics
-        if prof_data.get('actual_memory_bandwidth_gb_s', 0) > 0:
-            summary += f"    - Actual Memory Bandwidth: {prof_data['actual_memory_bandwidth_gb_s']:.1f} GB/s\n"
-        
-        if prof_data.get('memory_bandwidth_efficiency_percent', 0) > 0:
-            summary += f"    - Memory Bandwidth Efficiency: {prof_data['memory_bandwidth_efficiency_percent']:.1f}%\n"
-        
-        if prof_data.get('theoretical_memory_bandwidth_gb_s', 0) > 0:
-            summary += f"    - Theoretical Peak Bandwidth: {prof_data['theoretical_memory_bandwidth_gb_s']:.1f} GB/s\n"
-        
-        # Compute characteristics
-        if prof_data.get('arithmetic_intensity_ops_per_byte', 0) > 0:
-            summary += f"    - Arithmetic Intensity: {prof_data['arithmetic_intensity_ops_per_byte']:.2f} ops/byte\n"
-        
-        # GPU utilization metrics
-        if prof_data.get('real_gpu_utilization_percent', 0) > 0:
-            summary += f"    - Real GPU Utilization: {prof_data['real_gpu_utilization_percent']:.1f}%\n"
-        
-        if prof_data.get('real_memory_controller_utilization_percent', 0) > 0:
-            summary += f"    - Memory Controller Utilization: {prof_data['real_memory_controller_utilization_percent']:.1f}%\n"
-        
-        if prof_data.get('estimated_occupancy_percent', 0) > 0:
-            summary += f"    - Estimated Occupancy: {prof_data['estimated_occupancy_percent']:.1f}%\n"
-        
-        # PyTorch profiler metrics
-        if prof_data.get('pytorch_profiler_available', False):
-            summary += f"    - PyTorch CUDA Events: {prof_data.get('pytorch_num_cuda_events', 0)}\n"
-            cuda_time = prof_data.get('pytorch_cuda_time_us', 0) or prof_data.get('pytorch_total_cuda_time_us', 0) or 0.0
-            summary += f"    - PyTorch CUDA Time: {cuda_time:.1f}μs\n"
-            
-            if prof_data.get('pytorch_total_flops', 0) > 0:
-                summary += f"    - Measured FLOPS: {prof_data['pytorch_total_flops']:,.0f}\n"
-                summary += f"    - GFLOPS/sec: {prof_data.get('pytorch_gflops_per_sec', 0):.2f}\n"
-        
-        # Memory usage
-        if prof_data.get('memory_utilization_percent', 0) > 0:
-            summary += f"    - GPU Memory Usage: {prof_data['memory_utilization_percent']:.1f}% ({prof_data.get('memory_used_mb', 0):.0f}MB)\n"
-        
-        # Error information
-        if prof_data.get('pytorch_profiler_error'):
-            summary += f"    - PyTorch Profiler Issue: {prof_data['pytorch_profiler_error']}\n"
-        
-        if prof_data.get('nvml_note'):
-            summary += f"    - NVML Note: {prof_data['nvml_note']}\n"
-        
-        summary += "\n"
-    
-    # Comprehensive analysis based on real measurements
-    summary += "OPTIMIZATION ANALYSIS BASED ON REAL MEASUREMENTS:\n"
-    
-    # Collect all profiling data for analysis
-    all_prof_data = [profiling.get(size, {}) for size in results.keys()]
-    valid_prof_data = [data for data in all_prof_data if data.get('actual_memory_bandwidth_gb_s', 0) > 0]
-    
-    if valid_prof_data:
-        # Memory performance analysis
-        avg_memory_bw = float(np.mean([data.get('actual_memory_bandwidth_gb_s', 0.0) or 0.0 for data in valid_prof_data]))
-        avg_bw_efficiency = float(np.mean([data.get('memory_bandwidth_efficiency_percent', 0.0) or 0.0 for data in valid_prof_data]))
-        avg_arith_intensity = float(np.mean([data.get('arithmetic_intensity_ops_per_byte', 0.0) or 0.0 for data in valid_prof_data]))
-        
-        summary += f"  Memory Performance:\n"
-        summary += f"    - Average Memory Bandwidth: {avg_memory_bw:.1f} GB/s\n"
-        summary += f"    - Average Memory Efficiency: {avg_bw_efficiency:.1f}%\n"
-        summary += f"    - Average Arithmetic Intensity: {avg_arith_intensity:.2f} ops/byte\n"
-        
-        # Performance classification
-        if avg_arith_intensity < 1.0:
-            summary += f"    - CLASSIFICATION: MEMORY-BOUND kernel\n"
-            if avg_bw_efficiency < 50:
-                summary += f"    - PRIMARY BOTTLENECK: Poor memory access efficiency\n"
-                summary += f"    - OPTIMIZATION FOCUS: Memory coalescing, vectorized loads\n"
-        elif avg_arith_intensity > 3.0:
-            summary += f"    - CLASSIFICATION: COMPUTE-BOUND kernel\n"
-            summary += f"    - OPTIMIZATION FOCUS: Fast math functions, operation fusion\n"
-        else:
-            summary += f"    - CLASSIFICATION: BALANCED kernel\n"
-            summary += f"    - OPTIMIZATION FOCUS: Both memory and compute optimization\n"
-        
-        # GPU utilization analysis
-        gpu_utils = [data.get('real_gpu_utilization_percent', 0.0) or 0.0 for data in valid_prof_data if (data.get('real_gpu_utilization_percent', 0.0) or 0.0) > 0]
-        occupancies = [data.get('estimated_occupancy_percent', 0.0) or 0.0 for data in valid_prof_data if (data.get('estimated_occupancy_percent', 0.0) or 0.0) > 0]
-        
-        if gpu_utils:
-            avg_gpu_util = np.mean(gpu_utils)
-            avg_occupancy = np.mean(occupancies) if occupancies else 0
-            
-            summary += f"  GPU Utilization:\n"
-            summary += f"    - Average GPU Utilization: {avg_gpu_util:.1f}%\n"
-            summary += f"    - Average Estimated Occupancy: {avg_occupancy:.1f}%\n"
-            
-            if avg_gpu_util < 30:
-                summary += f"    - GPU UTILIZATION ISSUE: Low utilization detected\n"
-                summary += f"    - RECOMMENDATION: Increase block size or reduce kernel overhead\n"
-            elif avg_gpu_util >= 70:
-                summary += f"    - **GPU Utilization**: Good resource utilization achieved\n"
-        
-        # Arithmetic intensity analysis
-        arith_intensities = [data.get('arithmetic_intensity_ops_per_byte', 0.0) or 0.0 for data in valid_prof_data if (data.get('arithmetic_intensity_ops_per_byte', 0.0) or 0.0) > 0]
-        
-        if arith_intensities:
-            avg_arith_intensity = np.mean(arith_intensities)
-            summary += f"  Compute Characteristics:\n"
-            summary += f"    - Arithmetic Intensity: {avg_arith_intensity:.2f} ops/byte\n"
-            
-            if avg_arith_intensity < 1.0:
-                summary += f"    - Note: MEMORY-BOUND kernel - Focus on memory bandwidth optimization\n"
-            elif avg_arith_intensity > 3.0:
-                summary += f"    - Note: COMPUTE-BOUND kernel - Focus on arithmetic optimization\n"
-            else:
-                summary += f"    - Note: BALANCED kernel - Optimize both memory and compute\n"
-        
-        # PyTorch profiler analysis
-        pytorch_data = [data for data in valid_prof_data if data.get('pytorch_profiler_available', False)]
-        if pytorch_data:
-            total_flops = sum(data.get('pytorch_total_flops', 0) for data in pytorch_data)
-            avg_gflops = np.mean([data.get('pytorch_gflops_per_sec', 0) for data in pytorch_data if data.get('pytorch_gflops_per_sec', 0) > 0])
-            
-            summary += f"  Compute Performance:\n"
-            summary += f"    - Total FLOPS Measured: {total_flops:,.0f}\n"
-            if avg_gflops > 0:
-                summary += f"    - Average GFLOPS/sec: {avg_gflops:.2f}\n"
-    else:
-        summary += f"  - Limited profiling data available for comprehensive analysis\n"
-        summary += f"  - Install nvidia-ml-py for complete GPU metrics: pip install nvidia-ml-py\n"
-        
-        # Check for profiling issues
-        for size in results.keys():
-            prof_data = profiling.get(size, {})
-            if prof_data.get('pytorch_profiler_error'):
-                summary += f"  - PyTorch Profiler Issue: {prof_data['pytorch_profiler_error']}\n"
-                break
-    
-    return summary
 
+    details = benchmark_data.get("detailed_results", {})
+    profiling = benchmark_data.get("profiling", {})
+    records = []
+    # Use the same test-name keys as the stored profiling data. Distinct cases
+    # with identical sizes must retain their own metrics.
+    for name, case in details.items():
+        if case.get("status") == "success":
+            label = f"Size {case.get('total_elements', '?')} ({name})"
+            records.append((label, case.get("generated_metrics", {}),
+                            profiling.get(name, case.get("profiling_data", {}))))
+    if not details:
+        for size, metrics in benchmark_data.get("results", {}).items():
+            records.append((f"Size {size}", metrics, profiling.get(size, {})))
+    if not records:
+        lines = ["No successful benchmark measurements available"]
+        for name, case in details.items():
+            lines.append(f"  - {name}: {case.get('status', 'unknown')} | {case.get('error_message') or ''}")
+        return "\n".join(lines)
+
+    lines = ["COMPREHENSIVE CUDA PERFORMANCE ANALYSIS:"]
+    for label, metrics, prof in records:
+        lines.extend([
+            f"  {label}:",
+            f"    - Execution Time: {metrics.get('mean_time_ms', 0):.4f}ms",
+            f"    - Throughput: {metrics.get('throughput_elements_per_second', 0):,.0f} elem/s",
+        ])
+        if prof.get("actual_memory_bandwidth_gb_s", 0) > 0:
+            lines.append(f"    - Effective Memory Bandwidth (estimated bytes/time): {prof['actual_memory_bandwidth_gb_s']:.1f} GiB/s")
+        if prof.get("nvml_available"):
+            lines.extend([
+                f"    - NVML GPU Utilization (device sample): {prof['real_gpu_utilization_percent']:.1f}%",
+                f"    - NVML Memory Controller Activity: {prof['real_memory_controller_utilization_percent']:.1f}%",
+                f"    - GPU Memory Used: {prof['memory_used_mb']:.0f} MiB ({prof['memory_utilization_percent']:.1f}% of capacity)",
+                f"    - GPU UUID: {prof.get('gpu_uuid', 'unavailable')}",
+            ])
+        if prof.get("nvml_note"):
+            lines.append(f"    - NVML Note: {prof['nvml_note']}")
+        lines.append("")
+
+    lines.append("OPTIMIZATION ANALYSIS BASED ON REAL MEASUREMENTS:")
+    bandwidths = [prof["actual_memory_bandwidth_gb_s"] for _, _, prof in records
+                  if prof.get("actual_memory_bandwidth_gb_s", 0) > 0]
+    samples = [prof for _, _, prof in records if prof.get("nvml_available")]
+    if bandwidths:
+        lines.append(f"  - Average Effective Memory Bandwidth: {float(np.mean(bandwidths)):.1f} GiB/s")
+        lines.append("  - Effective bandwidth is calculated from estimated bytes per call and CUDA event timing.")
+    if samples:
+        utilization = float(np.mean([prof["real_gpu_utilization_percent"] for prof in samples]))
+        lines.append(f"  - Average NVML GPU Utilization (device samples): {utilization:.1f}%")
+        lines.append("  - NVML uses device-wide sampling windows; these samples are not kernel-specific occupancy or utilization.")
+    else:
+        lines.append("  - NVML samples unavailable; CUDA event timing and throughput are still recorded.")
+        if not any(prof.get("nvml_note") for _, _, prof in records):
+            lines.append("  - No NVML samples were collected for these results; this does not establish a missing dependency.")
+    lines.append("  - Occupancy, arithmetic intensity, theoretical peak bandwidth and bandwidth efficiency were not measured.")
+    return "\n".join(lines) + "\n"
 
 def format_test_results_for_suggestions(correctness_results: Dict[str, Any]) -> str:
     """Format detailed test results for optimization suggestions."""

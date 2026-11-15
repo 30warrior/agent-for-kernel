@@ -3,7 +3,10 @@ import sys
 import json
 import time
 import argparse
+import csv
 import logging
+import tempfile
+from contextlib import contextmanager
 import threading
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union
@@ -13,8 +16,12 @@ import re
 import importlib
 import torch
 import sgl_kernel as sglk
+from openai import AsyncOpenAI
 # OpenAI Agents SDK imports
-from agents import Agent, Runner, function_tool, input_guardrail, GuardrailFunctionOutput, RunContextWrapper
+from agents import (
+    Agent, Runner, function_tool, input_guardrail, GuardrailFunctionOutput, RunContextWrapper,
+    set_default_openai_client, set_default_openai_api, set_tracing_disabled,
+)
 
 from test import (
     KernelTest, MergeStateTest, SiluTest, RMSNormTest,
@@ -63,6 +70,7 @@ except ImportError:
 # Global state for optimization process
 optimization_state = {
     "kernel_versions": {},
+    "kernel_output_dir": None,
     "benchmark_results": {},
     "iteration_count": 0,
     "best_version": None,
@@ -132,56 +140,14 @@ async def validate_cuda_code_input(
 
 # Function tools for agent capabilities
 @function_tool
-def save_kernel_code(version: str, code: str, output_dir: str = None, base_filename: str = None) -> str:
-    """Save CUDA kernel code to file."""
-    try:
-        # Use current run's kernel directory if no output_dir specified
-        if output_dir is None:
-            # Find the latest run directory
-            base_runs_dir = Path("cuda_optimization_runs")
-            if base_runs_dir.exists():
-                latest_link = base_runs_dir / "latest"
-                if latest_link.exists() and latest_link.is_symlink():
-                    output_dir = str(latest_link / "kernels")
-                else:
-                    # Fallback: find the most recent run directory
-                    run_dirs = [d for d in base_runs_dir.glob("run_*") if d.is_dir()]
-                    if run_dirs:
-                        latest_run = max(run_dirs, key=lambda x: x.stat().st_mtime)
-                        output_dir = str(latest_run / "kernels")
-                    else:
-                        output_dir = "cuda_optimization_runs/kernels"
-            else:
-                output_dir = "cuda_optimization_runs/kernels"
-        
-        os.makedirs(output_dir, exist_ok=True)
-        clean_code = extract_cuda_code(code)
-        
-        # Ensure proper newlines are preserved
-        clean_code = clean_code.replace('\\n', '\n')
-        
-        # Use base_filename if provided, otherwise fallback to default
-        if base_filename:
-            # Remove .cu extension if present
-            base_name = base_filename.replace('.cu', '')
-            kernel_path = os.path.join(output_dir, f"{base_name}_{version}.cu")
-        else:
-            kernel_path = os.path.join(output_dir, f"kernel_{version}.cu")
-        
-        with open(kernel_path, "w", encoding='utf-8') as f:
-            f.write(clean_code)
-        
-        # Store in global state with proper formatting
-        optimization_state["kernel_versions"][version] = {
-            "code": clean_code,
-            "path": kernel_path
-        }
-        
-        logger.info(f"Kernel {version} saved to {kernel_path}")
-        return f"Successfully saved kernel {version} to {kernel_path}"
-    except Exception as e:
-        logger.error(f"Error saving kernel: {e}")
-        return f"Error saving kernel: {e}"
+def save_kernel_code(version: str, code: str) -> str:
+    """Save CUDA source as kernel_<version>.cu in this run's kernels directory.
+
+    The application chooses the output directory; pass only the version and code.
+    """
+    if not optimization_state.get("kernel_output_dir"):
+        return "Error saving kernel: No active optimization run"
+    return _internal_save_kernel_code(version, code)
 
 
 def _get_cuda_arch() -> Tuple[str, str]:
@@ -430,6 +396,8 @@ def verify_kernel_correctness_detailed(version: str) -> str:
             "test_results": detailed_results,
             "overall_status": "passed" if summary_stats["failed"] == 0 and summary_stats["errors"] == 0 else "failed"
         }
+        if optimization_state.get("benchmark_results"):
+            save_benchmark_reports()
 
         print(f"verify_kernel_correctness_detailed completed")
 
@@ -448,6 +416,152 @@ def verify_kernel_correctness(version: str) -> str:
         return result
     except Exception as e:
         return f"Error in correctness verification: {e}"
+
+
+def _report_json_value(value):
+    """Convert numeric and test-spec values to portable JSON values."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (Path, torch.dtype)):
+        return str(value)
+    raise TypeError(f"Cannot export {type(value).__name__} to JSON")
+
+
+def _write_report_atomic(path: Path, write_contents):
+    """Replace a report only after its new contents have been fully written."""
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            write_contents(stream)
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _append_performance_log(text: str):
+    """Keep the displayed benchmark and strategy performance text in one file."""
+    kernel_dir = optimization_state.get("kernel_output_dir")
+    if not kernel_dir:
+        raise ValueError("No active run directory for performance log")
+    path = Path(kernel_dir).resolve().parent / "performance.log"
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(f"\n[{datetime.now().isoformat(timespec='seconds')}]\n{text}\n")
+
+
+def save_benchmark_reports() -> List[Path]:
+    """Persist all measured versions in the active run after each benchmark."""
+    kernel_dir = optimization_state.get("kernel_output_dir")
+    if not kernel_dir:
+        raise ValueError("No active run directory for benchmark reports")
+    run_dir = Path(kernel_dir).resolve().parent
+    benchmarks = optimization_state.get("benchmark_results", {})
+    correctness = optimization_state.get("detailed_correctness_results", {})
+    payload = {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "baseline": optimization_state.get("baseline", {}),
+        "test_cases": optimization_state.get("generic_test_cases", {}),
+        "kernel_paths": {
+            version: info["path"]
+            for version, info in optimization_state.get("kernel_versions", {}).items()
+        },
+        "benchmark_results": benchmarks,
+        "correctness_results": correctness,
+    }
+    json_text = json.dumps(payload, indent=2, ensure_ascii=False, default=_report_json_value)
+    summary_rows, detail_rows = [], []
+    for version, benchmark in benchmarks.items():
+        cases = benchmark.get("detailed_results", {})
+        corr = correctness.get(version, {})
+        successful = [case for case in cases.values() if case.get("status") == "success"]
+        count = len(successful)
+        generated_time = sum(case["generated_metrics"]["mean_time_ms"] for case in successful)
+        baseline_time = sum(case["baseline_metrics"]["mean_time_ms"] for case in successful)
+        summary_rows.append({
+            "version": version,
+            "correctness_status": corr.get("overall_status", "not_tested"),
+            "successful_tests": count,
+            "failed_tests": len(cases) - count,
+            "total_tests": len(cases),
+            "mean_time_ms": generated_time / count if count else None,
+            "baseline_mean_time_ms": baseline_time / count if count else None,
+            "aggregate_speedup": baseline_time / generated_time if generated_time > 0 else None,
+            "kernel_path": payload["kernel_paths"].get(version, ""),
+        })
+        for name, case in cases.items():
+            generated = case.get("generated_metrics", {})
+            baseline = case.get("baseline_metrics", {})
+            case_correctness = corr.get("test_results", {}).get(name, {})
+            detail_rows.append({
+                "version": version,
+                "test_name": name,
+                "input_shape": case.get("input_shape_str", ""),
+                "status": case.get("status", "unknown"),
+                "correctness_status": case_correctness.get("status", "not_tested"),
+                "mean_time_ms": generated.get("mean_time_ms"),
+                "std_time_ms": generated.get("std_time_ms"),
+                "baseline_mean_time_ms": baseline.get("mean_time_ms"),
+                "speedup": case.get("comparison_metrics", {}).get("speedup"),
+                "throughput_elements_per_second": generated.get("throughput_elements_per_second"),
+                "error_message": case.get("error_message"),
+            })
+
+    def write_csv(stream, fields, rows):
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    summary_fields = [
+        "version", "correctness_status", "successful_tests", "failed_tests", "total_tests",
+        "mean_time_ms", "baseline_mean_time_ms", "aggregate_speedup", "kernel_path",
+    ]
+    detail_fields = [
+        "version", "test_name", "input_shape", "status", "correctness_status",
+        "mean_time_ms", "std_time_ms", "baseline_mean_time_ms", "speedup",
+        "throughput_elements_per_second", "error_message",
+    ]
+    paths = [run_dir / name for name in (
+        "benchmark_results.json", "benchmark_summary.csv", "benchmark_details.csv",
+    )]
+    _write_report_atomic(paths[0], lambda stream: stream.write(json_text + "\n"))
+    _write_report_atomic(paths[1], lambda stream: write_csv(stream, summary_fields, summary_rows))
+    _write_report_atomic(paths[2], lambda stream: write_csv(stream, detail_fields, detail_rows))
+    logger.info("Benchmark reports saved to %s", run_dir)
+    return paths
+
+
+@contextmanager
+def _nvml_for_current_device():
+    """Match the active CUDA device by UUID, including CUDA_VISIBLE_DEVICES remapping."""
+    nvml = None
+    initialized = False
+    handle, note = None, None
+    try:
+        import pynvml as nvml
+        nvml.nvmlInit()
+        initialized = True
+        device_uuid = str(torch.cuda.get_device_properties(torch.cuda.current_device()).uuid)
+        if not device_uuid.startswith(("GPU-", "MIG-")):
+            device_uuid = "GPU-" + device_uuid
+        handle = nvml.nvmlDeviceGetHandleByUUID(device_uuid)
+    except ImportError:
+        note = "NVML bindings unavailable in this Python environment (nvidia-ml-py)."
+    except Exception as exc:
+        note = f"NVML device query unavailable: {type(exc).__name__}: {exc}"
+    try:
+        yield handle, note
+    finally:
+        if initialized:
+            try:
+                nvml.nvmlShutdown()
+            except Exception as exc:
+                logger.warning("NVML shutdown failed: %s", exc)
 
 
 def benchmark_kernel_detailed(version: str) -> str:
@@ -487,22 +601,16 @@ def benchmark_kernel_detailed(version: str) -> str:
         except Exception as e:
             return f"Error importing callable: {e}"
         
-        # NVML setup
-        nvml_handle = None
-        try:
-            import pynvml
-            pynvml.nvmlInit()
-            nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        except ImportError:
-            pass
-        
         # Run benchmarks using test instances
-        benchmark_results = test_collection.run_all_benchmarks(
-            generated_callable=generated_callable,
-            baseline_callable=baseline_callable,
-            warmup=20,
-            iters=100
-        )
+        with _nvml_for_current_device() as (nvml_handle, nvml_note):
+            benchmark_results = test_collection.run_all_benchmarks(
+                generated_callable=generated_callable,
+                baseline_callable=baseline_callable,
+                warmup=20,
+                iters=100,
+                nvml_handle=nvml_handle,
+                nvml_note=nvml_note,
+            )
         
         # Convert results to dict format and compute summary stats
         detailed_results = {}
@@ -551,12 +659,19 @@ def benchmark_kernel_detailed(version: str) -> str:
         
         # Store results in optimization state
         optimization_state.setdefault("benchmark_results", {})[version] = {
+            "measured_at": datetime.now().isoformat(timespec="seconds"),
             "success": True,
             "results": legacy_results,
             "detailed_results": detailed_results,
             "summary_stats": summary_stats,
             "profiling": profiling_data
         }
+        report_paths = save_benchmark_reports()
+        _append_performance_log(
+            f"---- Benchmark Summary ({version}) ----\n"
+            f"{format_benchmark_summary(optimization_state['benchmark_results'][version])}"
+        )
+        print(f"Performance files updated: {', '.join(str(path) for path in report_paths)}")
         
         # Return formatted summary
         return format_benchmark_results(benchmark_results, version)
@@ -653,7 +768,7 @@ class CUDAKernelOptimizer:
         # Create timestamped run directory structure
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         
-        self.runs_base_dir = Path("cuda_optimization_runs")
+        self.runs_base_dir = Path(__file__).resolve().parent / "cuda_optimization_runs"
         self.run_dir = self.runs_base_dir / f"run_{timestamp}"
         
         # Create directory structure for this run
@@ -661,6 +776,7 @@ class CUDAKernelOptimizer:
         (self.run_dir / "kernels").mkdir(exist_ok=True)
         (self.run_dir / "visualizations").mkdir(exist_ok=True)
         (self.run_dir / "logs").mkdir(exist_ok=True)
+        optimization_state["kernel_output_dir"] = str((self.run_dir / "kernels").resolve())
         
         # Create/update latest symlink for convenience
         latest_link = self.runs_base_dir / "latest"
@@ -775,13 +891,17 @@ class CUDAKernelOptimizer:
         # Save as v1 under current run
         out_dir = str(self.run_dir / "kernels")
         base_filename = Path(self.initial_kernel_path).name
-        _internal_save_kernel_code("v1", init_code, out_dir, base_filename)
+        save_msg = _internal_save_kernel_code("v1", init_code, out_dir, base_filename)
+        if save_msg.startswith("Error saving kernel:"):
+            return False, save_msg
         
         # Build PyBind for v1
         export_name = optimization_state.get("generated_export_func") or \
                       optimization_state.get("baseline", {}).get("func", "sgl_fused_add_rmsnorm")
         pybind_msg = compile_generated_pybind("v1", export_name)
         print(pybind_msg)
+        if "PyBind compiled" not in pybind_msg:
+            return False, pybind_msg
         
         # Notify orchestrator
         Runner.run_sync(
@@ -998,6 +1118,9 @@ class CUDAKernelOptimizer:
             )
         else:
             perf_context = format_benchmark_summary(bench_data)
+        _append_performance_log(
+            f"---- CURRENT PERFORMANCE ({current_version} -> {next_version}) ----\n{perf_context}"
+        )
         
         suggest_prompt = get_suggest_prompt(
             next_version=next_version,
@@ -1211,10 +1334,6 @@ class CUDAKernelOptimizer:
         except Exception as e:
             logger.error(f"Error during optimization: {e}")
             print(f"\n❌ Optimization failed: {e}")
-            try:
-                Runner.run_sync(orchestrator_agent, f"Run failed with error: {str(e)}")
-            except Exception:
-                pass
             self._finalize_run_metadata(success=False)
             return {"success": False, "error": str(e), "run_directory": str(self.run_dir)}
     
@@ -1469,10 +1588,11 @@ def compile_generated_pybind(version: str, export_func: str, extra_cuda_cflags: 
     
     thread = threading.Thread(target=compile_task, daemon=True)
     thread.start()
-    thread.join(timeout=60)
+    compile_timeout = int(os.environ.get("ASTRA_COMPILE_TIMEOUT", "300"))
+    thread.join(timeout=compile_timeout)
     
     if thread.is_alive():
-        return f"Error: Compilation timed out after 60 seconds"
+        return f"Error: Compilation timed out after {compile_timeout} seconds"
     if result["error"]:
         logger.error(f"Compilation failed: {result['error']}")
         return f"Error: Compilation failed: {result['error']}"
@@ -1490,17 +1610,25 @@ def compile_generated_pybind(version: str, export_func: str, extra_cuda_cflags: 
 def _internal_save_kernel_code(version: str, code: str, output_dir: Optional[str] = None, base_filename: str = None) -> str:
     """Internal helper to save kernel code without @function_tool decorator."""
     try:
-        output_dir = output_dir or "cuda_optimization_runs/kernels"
-        os.makedirs(output_dir, exist_ok=True)
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", version):
+            raise ValueError("Version must contain only letters, digits, underscores or hyphens")
+        # An active run owns the destination even if an internal caller supplies a path.
+        output_dir = optimization_state.get("kernel_output_dir") or output_dir
+        if not output_dir:
+            raise ValueError("No active optimization run or internal output directory")
+        destination = Path(output_dir).resolve()
+        destination.mkdir(parents=True, exist_ok=True)
         
         clean_code = extract_cuda_code(code).replace('\\n', '\n')
-        base_name = base_filename.replace('.cu', '') if base_filename else "kernel"
-        kernel_path = os.path.join(output_dir, f"{base_name}_{version}.cu")
+        base_name = Path(base_filename).stem if base_filename else "kernel"
+        kernel_path = destination / f"{base_name}_{version}.cu"
+        if kernel_path.resolve().parent != destination:
+            raise ValueError("Kernel path must stay inside this run's kernels directory")
         
         with open(kernel_path, "w", encoding='utf-8') as f:
             f.write(clean_code)
         
-        optimization_state["kernel_versions"][version] = {"code": clean_code, "path": kernel_path}
+        optimization_state["kernel_versions"][version] = {"code": clean_code, "path": str(kernel_path)}
         logger.info(f"Kernel {version} saved to {kernel_path}")
         return f"Successfully saved kernel {version} to {kernel_path}"
     except Exception as e:
@@ -1537,7 +1665,11 @@ def _import_callable(module_name: str, func_name: str):
 
 def main():
     parser = argparse.ArgumentParser(description='CUDA Kernel Optimizer (Refactored, general baseline mode). Benchmarking proceeds regardless of correctness results.')
-    parser.add_argument('--api-key', type=str, required=True, help='OpenAI API key')
+    parser.add_argument('--api-key', type=str, default=os.environ.get('OPENAI_API_KEY'), help='API key (defaults to OPENAI_API_KEY)')
+    parser.add_argument('--base-url', type=str, default=os.environ.get('OPENAI_BASE_URL'), help='OpenAI-compatible API base URL, including /v1')
+    parser.add_argument('--model', type=str, default='o4-mini', help='Model name for all five agents (default: o4-mini)')
+    parser.add_argument('--model-api', choices=['responses', 'chat_completions'], default='responses', help='API interface supported by the provider (default: responses)')
+    parser.add_argument('--disable-tracing', action='store_true', help='Disable trace uploads to OpenAI (recommended for third-party providers)')
     parser.add_argument('--max-iterations', type=int, default=5, help='Maximum optimization iterations')
     parser.add_argument('--initial-kernel-path', type=str, required=True, help='Path to initial simplified CUDA kernel file')
     parser.add_argument('--baseline-module', type=str, default='', help='Baseline module to import (optional). If empty, will use sgl_kernel or sglang.sgl_kernel automatically')
@@ -1547,8 +1679,21 @@ def main():
     parser.add_argument('--input-attention', action='store_true', help='Set to true for attention/merge_state kernels, false (default) for rmsnorm kernels')
     parser.add_argument('--generated-export-func', type=str, default='', help='Export function name expected in generated PyBind module (defaults to baseline-func)')
     args = parser.parse_args()
+    if not args.api_key:
+        parser.error('Set OPENAI_API_KEY or pass --api-key')
     
     os.environ['OPENAI_API_KEY'] = args.api_key
+    client = AsyncOpenAI(api_key=args.api_key, base_url=args.base_url or None)
+    set_default_openai_client(client, use_for_tracing=not args.disable_tracing)
+    set_default_openai_api(args.model_api)
+    if args.disable_tracing:
+        set_tracing_disabled(True)
+    for agent in (
+        orchestrator_agent, code_generation_agent, correctness_testing_agent,
+        benchmarking_agent, optimization_strategy_agent,
+    ):
+        agent.model = args.model
+    logger.info("LLM configured for all five agents: model=%s, api=%s", args.model, args.model_api)
     optimizer = CUDAKernelOptimizer(
         max_iterations=args.max_iterations,
         initial_kernel_path=args.initial_kernel_path,

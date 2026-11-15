@@ -33,6 +33,7 @@ Suggestions:
 - Leverage FMA (Fused Multiply-Add)
 
 Workflow: Use save_kernel_code → compile_cuda_kernel to save and compile, repeating compilation (with updated code) until it succeeds; output code only through tools, no explanatory text.
+Call save_kernel_code with version and code only. The application saves sources and build artifacts in the current run's kernels directory; do not choose paths or use /tmp.
 """,
 
     "correctness_tester": """You handle test case generation and correctness verification with unified test data.
@@ -132,7 +133,8 @@ REQUIREMENTS:
 - Keep the same functionality.
 - Include proper headers; expose a __global__ kernel entry.
 - Avoid main(); produce code suitable for nvcc compilation.
-- Use save_kernel_code('{next_version}') then compile_cuda_kernel('{next_version}').
+- Use save_kernel_code(version='{next_version}', code=<complete CUDA source>) then compile_cuda_kernel('{next_version}').
+- The application chooses the current run's kernels directory; do not supply paths or use /tmp.
 - Output only code via the tool (no explanation text).
 """
 
