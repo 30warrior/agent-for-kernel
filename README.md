@@ -18,7 +18,7 @@ This branch contains the migration in separate, ordered commits:
 7. Share the multi-agent refinement workflow across generation targets.
 8. Report reference speedup, refinement speedup and batch task outcomes.
 
-Steps 1 through 4 are implemented at this commit. Dataset execution and Arm generation
+Steps 1 through 5 are implemented at this commit. Dataset execution and Arm generation
 are not yet available; do not treat the existing CUDA entry point as CPU-ready.
 
 ## Dependencies
@@ -70,3 +70,14 @@ a dry run. API settings use `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, `--mod
 and `--model-api`. Tracing is disabled unless explicitly enabled. Secrets are
 not written into run metadata. The ModelNew wrapper contract is recorded in
 `astra/generation.py`; subsequent commits connect compilation and refinement.
+
+## Native compilation
+
+Generation now exposes a real compile tool. CUDA uses nvcc and the active GPU
+architecture; NEON/SVE use the native AArch64 compiler with explicit ISA flags.
+No fast-math flag is enabled by default. Compiler output and exact options are
+saved per candidate. Compilation runs in a subprocess with a process-group timeout
+(`--compile-timeout`, seconds), with two build jobs and a candidate-local build
+directory. C++ headers/toolchain matching the installed PyTorch build are required.
+Generated code is executable native/Python code and runs as the current account;
+this implementation does not provide a security sandbox for untrusted tasks.

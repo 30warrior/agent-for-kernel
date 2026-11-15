@@ -26,6 +26,7 @@ def build_parser():
     parser.add_argument("--model-api", choices=("responses", "chat_completions"), default="responses")
     parser.add_argument("--enable-tracing", action="store_true", help="Opt in to SDK trace uploads")
     parser.add_argument("--max-agent-turns", type=int, default=12)
+    parser.add_argument("--compile-timeout", type=int, default=300)
     return parser
 
 
@@ -42,7 +43,11 @@ def main():
     if args.prepare_only or args.generate_only:
         from astra.reference import prepare_reference, save_reference
         from astra.timing import measure
+        from astra.backends import Backend
+        backend = Backend(args.target, args.compile_timeout)
+        hardware = backend.capabilities()
         reference = prepare_reference(task, args.target, args.seed, args.threads)
+        reference.metadata["hardware"] = hardware
         folder = Path(__file__).resolve().parent / "optimization_runs" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         save_reference(reference, folder)
         baseline = [measure(reference.model, case, args.target, args.warmup, args.trials) for case in reference.cases]
@@ -52,7 +57,7 @@ def main():
             config = LLMConfig(args.api_key, args.base_url, args.model, args.model_api,
                                args.enable_tracing, args.max_agent_turns)
             configure_llm(config)
-            generate_candidate(task, reference.metadata, args.target, folder / "v1", config)
+            generate_candidate(task, reference.metadata, args.target, folder / "v1", config, compiler=backend.compile_feedback)
         print(folder)
         return 0
     print(json.dumps(task.metadata(), indent=2, ensure_ascii=False))
