@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.so
+*.o
+*.obj
+*.pyd
+*.egg-info/
+build/
+.venv/
+.env
+.env.*
+!.env.example
+cuda_optimization.log
+cuda_optimization_runs/
+optimization_runs/
+.publish/

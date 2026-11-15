@@ -15,7 +15,6 @@ import numpy as np
 import re
 import importlib
 import torch
-import sgl_kernel as sglk
 from openai import AsyncOpenAI
 # OpenAI Agents SDK imports
 from agents import (
@@ -349,7 +348,7 @@ def verify_kernel_correctness_detailed(version: str) -> str:
         try:
             if baseline_callable is None:
                 baseline_func_name = baseline_info.get("func", "")
-                baseline_callable = _import_callable("", baseline_func_name)
+                baseline_callable = _import_callable(baseline_info.get("module", ""), baseline_func_name)
             if generated_callable is None:
                 gw = optimization_state["generated_wrapper"]
                 generated_callable = _import_callable(gw["module"], gw["func"])
@@ -597,7 +596,7 @@ def benchmark_kernel_detailed(version: str) -> str:
                 generated_callable = _import_callable(gw["module"], gw["func"])
             if baseline_callable is None:
                 baseline_func_name = baseline_info.get("func", "")
-                baseline_callable = _import_callable("", baseline_func_name)
+                baseline_callable = _import_callable(baseline_info.get("module", ""), baseline_func_name)
         except Exception as e:
             return f"Error importing callable: {e}"
         
@@ -744,7 +743,7 @@ class CUDAKernelOptimizer:
     """
     
     def __init__(self, max_iterations: int = 3, initial_kernel_path: Optional[str] = None,
-                 baseline_module: str = "sgl_kernel", baseline_func: str = "sgl_fused_add_rmsnorm",
+                 baseline_module: str = "", baseline_func: str = "",
                  generated_wrapper: Optional[str] = None, compare_kind: str = "generic",
                  generated_export_func: Optional[str] = None, input_attention: bool = False):
         self.max_iterations = max_iterations
@@ -897,7 +896,7 @@ class CUDAKernelOptimizer:
         
         # Build PyBind for v1
         export_name = optimization_state.get("generated_export_func") or \
-                      optimization_state.get("baseline", {}).get("func", "sgl_fused_add_rmsnorm")
+                      optimization_state.get("baseline", {}).get("func", "")
         pybind_msg = compile_generated_pybind("v1", export_name)
         print(pybind_msg)
         if "PyBind compiled" not in pybind_msg:
@@ -1179,7 +1178,7 @@ class CUDAKernelOptimizer:
         
         # Compile and build PyBind
         export_name = optimization_state.get("generated_export_func") or \
-                      optimization_state.get("baseline", {}).get("func", "sgl_fused_add_rmsnorm")
+                      optimization_state.get("baseline", {}).get("func", "")
         pybind_msg = compile_generated_pybind(next_version, export_name)
         print(pybind_msg)
         
@@ -1637,25 +1636,19 @@ def _internal_save_kernel_code(version: str, code: str, output_dir: Optional[str
 
 
 def _import_callable(module_name: str, func_name: str):
-    """Import a callable by module and function name.
-    
-    For baseline (empty module_name): uses sgl_kernel directly.
-    For generated modules: looks up in _generated_modules cache or imports.
+    """Resolve an explicitly configured callable without a library-specific fallback.
+
+    Generated extensions are looked up in the run cache. Reference callables may
+    come from any installed Python module; importing this module does not import
+    or require sgl-kernel.
     """
+    if not module_name:
+        raise ImportError("Baseline module must be configured explicitly")
     if not func_name:
         raise ImportError("Function name not provided")
-    
-    # Baseline via sgl_kernel
-    if not module_name or module_name in ("sgl_kernel", "ops:sgl_kernel"):
-        fn = getattr(sglk, func_name, None)
-        if fn is None:
-            raise AttributeError(f"sgl_kernel has no attribute '{func_name}'")
-        if not callable(fn):
-            raise TypeError(f"sgl_kernel.{func_name} is not callable")
-        return fn
-    
-    # Generated module
-    mod = _generated_modules.get(module_name) or importlib.import_module(module_name)
+    mod = _generated_modules.get(module_name)
+    if mod is None:
+        mod = importlib.import_module(module_name)
     fn = getattr(mod, func_name, None)
     if fn is None:
         raise AttributeError(f"{module_name} has no attribute '{func_name}'")
@@ -1663,8 +1656,9 @@ def _import_callable(module_name: str, func_name: str):
         raise TypeError(f"{module_name}.{func_name} is not callable")
     return fn
 
+
 def main():
-    parser = argparse.ArgumentParser(description='CUDA Kernel Optimizer (Refactored, general baseline mode). Benchmarking proceeds regardless of correctness results.')
+    parser = argparse.ArgumentParser(description='Legacy CUDA source optimizer with an explicitly configured reference callable.')
     parser.add_argument('--api-key', type=str, default=os.environ.get('OPENAI_API_KEY'), help='API key (defaults to OPENAI_API_KEY)')
     parser.add_argument('--base-url', type=str, default=os.environ.get('OPENAI_BASE_URL'), help='OpenAI-compatible API base URL, including /v1')
     parser.add_argument('--model', type=str, default='o4-mini', help='Model name for all five agents (default: o4-mini)')
@@ -1672,8 +1666,8 @@ def main():
     parser.add_argument('--disable-tracing', action='store_true', help='Disable trace uploads to OpenAI (recommended for third-party providers)')
     parser.add_argument('--max-iterations', type=int, default=5, help='Maximum optimization iterations')
     parser.add_argument('--initial-kernel-path', type=str, required=True, help='Path to initial simplified CUDA kernel file')
-    parser.add_argument('--baseline-module', type=str, default='', help='Baseline module to import (optional). If empty, will use sgl_kernel or sglang.sgl_kernel automatically')
-    parser.add_argument('--baseline-func', type=str, default='sgl_fused_add_rmsnorm', help='Baseline function name in module')
+    parser.add_argument('--baseline-module', type=str, required=True, help='Python module containing the reference callable; no implicit library fallback')
+    parser.add_argument('--baseline-func', type=str, required=True, help='Reference callable name in the configured module')
     parser.add_argument('--generated-wrapper', type=str, default='', help="Optional 'module:function' callable to run generated kernel for generic comparison")
     parser.add_argument('--compare-kind', type=str, default='generic', help="Comparison mode tag (e.g., 'generic','rmsnorm','qita') to guide test generation prompts")
     parser.add_argument('--input-attention', action='store_true', help='Set to true for attention/merge_state kernels, false (default) for rmsnorm kernels')
