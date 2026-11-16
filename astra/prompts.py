@@ -28,8 +28,8 @@ Constraints:
 
 TARGET_GUIDANCE = {
     "cuda": "Generate CUDA C++ (.cu) with at least one __global__ compute kernel. Launch on PyTorch's current CUDA stream; check shapes/dtypes and handle tails.\n",
-    "neon": "Generate AArch64 C++ with <arm_neon.h> NEON intrinsics. Handle fixed-width vector tails and unaligned inputs safely.\n",
-    "sve": "Generate AArch64 C++ with <arm_sve.h> SVE intrinsics. Use predicates and runtime lane counts; do not assume a fixed vector length.\n",
+    "neon": "Generate AArch64 C++ using <arm_neon.h> NEON intrinsics within the supplied compiler flags. Do not use SVE, SVE2 or SME even if the host supports them. Handle fixed-width vector tails and unaligned inputs safely.\n",
+    "sve": "Generate AArch64 C++ for an SVE-enabled target. NEON (<arm_neon.h>), SVE (<arm_sve.h>) and mixed implementations are allowed within the supplied compiler flags. Choose according to task shapes, strides and measured performance; using both ISAs or using SVE is not mandatory. For SVE code, use predicates and runtime lane counts; do not assume a fixed vector length. Do not assume SVE2, SME or unsupported compiler intrinsics.\n",
 }
 
 ORCHESTRATOR = """You are the Orchestrator Agent responsible for coordinating the kernel optimization process.

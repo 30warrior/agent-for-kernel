@@ -30,6 +30,15 @@ bash run_server.sh --dataset akg --dataset-root benchmarks/akg \
 如果环境代理指向未运行的本机端口，应先修复代理，或仅在本次进程中取消相应
 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 及小写变量；启动脚本不会擅自更改代理。
 
+`--target neon` 保持 NEON 兼容性：编译参数为 `-march=armv8-a+simd`，即使
+当前机器支持 SVE，也不允许生成 SVE 指令。对应优化建议为 `prompts/cpu_neon.md`。
+`--target sve` 表示目标机器支持 SVE，编译参数为 `-march=armv8.2-a+sve`
+和 `-msve-vector-bits=scalable`，允许纯 NEON、纯 SVE 或混合实现。对应优化建议为
+`prompts/cpu_sve.md`，同时提供给 Coding Agent 和 Planning Agent。无需强制混用，
+也无需强制出现 SVE 指令；应按 shape、stride 和实测性能选择。SVE 路径仍需使用
+运行时向量长度，不得假定 SVE2、SME 或编译器未提供的桥接 intrinsics 可用。
+每个目标只加载自己的 Markdown 文件；修改后在下一次启动时生效。
+
 默认 TestingAgent 一次生成 8 个额外样例，先全部在参考模型上验证，再冻结为
 `test_suite.json` 和 `reference.pt`。所有版本复用同一组原始及额外样例；正确性
 不通过的版本不计时。编译失败不能进行正确性检查。可用

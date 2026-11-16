@@ -4,6 +4,10 @@ This branch runs agents, model API calls, native compilation and evaluation on
 the server. See [server commands and configuration](docs/server-execution.md).
 TestingAgent freezes extra tests once for all versions; target-specific CPU
 optimization guidance is editable in `prompts/cpu_neon.md` and `prompts/cpu_sve.md`.
+The `neon` target stays within NEON-compatible instructions. The `sve` target
+allows NEON-only, SVE-only or mixed implementations; both coding and planning
+agents use this policy and the selected target's guidance file. Mixing is optional
+and should be justified by measured performance.
 
 Astra is being extended to generate and iteratively optimize kernels from
 KernelBench and AKG benchmark PyTorch tasks. Planned generation targets are

@@ -1,15 +1,16 @@
 Suggestions:
-- Fuse Elementwise Operations and Reductions When Possible
-- Use NEON Vectorized Access with Alignment and Stride Checks
-- Use Multiple Independent Accumulators for Reductions and FMA
-- Tile Loops and Reuse Data in Registers and Cache
-- Hoist Broadcasting, Shape and Address Calculations out of Hot Loops
-- Handle Vector Tails Safely and Preserve Numerical Accuracy
-- Measure Packing and Layout Conversion Costs within the Model Boundary
+- Fuse Elementwise Operations and Reductions to Reduce Intermediate Memory Traffic
+- Choose NEON Loop Structures According to Shapes, Strides, and Measured Performance
+- Prefer Contiguous Vector Access and Broadcasts; Consider Packing When Its Costs Are Justified
+- Use Independent Accumulators, Loop Unrolling, and FMA to Reduce Dependency Chains
+- Tile Loops and Reuse Data in Registers and Cache; Balance Reuse Against Register Pressure
+- Hoist Invariant Broadcasts, Shape and Address Calculations; Minimize Lane Extraction and Shuffles
+- Handle Fixed-Width Vector Tails Safely and Check Strides and Alignment
+- Consider Prefetching for Large Workloads; Include Packing and Layout Conversion Costs within the Model Boundary
 
 Focus:
-- NEON is fixed-width; do not use SVE, SVE2, SME or other unsupported instructions.
-- Choose the vectorization axis from actual strides; avoid unnecessary gathers and scalar work per lane.
-- Consider register blocking, loop unrolling, load/store traffic and dependency chains.
+- This target guarantees NEON only. Do not use SVE, SVE2, SME or optional extensions not enabled by the supplied compiler flags, even if the host supports them.
+- Choose vectorization axes from actual strides; avoid scalar work per lane, spills, and excessive unrolling.
+- Preserve numerical accuracy and memory safety; use FMA or approximate math only within the required tolerance.
 - Remain single-threaded; do not use OpenMP or external threaded libraries.
-- Evaluate every fixed case and do not optimize by recognizing particular input values.
+- Evaluate every fixed case. Shape/stride-based specialization is allowed; recognizing particular input values or hard-coding outputs is not.
