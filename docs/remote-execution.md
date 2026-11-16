@@ -71,18 +71,16 @@ python -m venv .venv
 
 ## 不调用模型的实际验证
 
-示例是明确标注的**手写**实现，用于检查远程链路；它们不是 LLM 的生成结果。
-NEON 使用 `vaddq_f32`，SVE 使用运行时 lane 数和尾部 predicate，支持两维连续 FP32 矩阵
-与单行广播，是 AKG `elemwise_add_001.py` 的最小运行样例。
+准备参考实现不需要模型 SDK 或本地 PyTorch：
 
 ```powershell
-# 使用系统 Python 也可以：这些操作不需要模型 SDK 或本地 PyTorch。
 .\run_remote.ps1 -PrepareOnly
-.\run_remote.ps1 -Target neon -EvaluateOnly "$PWD/examples/remote_add/neon"
-.\run_remote.ps1 -Target sve -EvaluateOnly "$PWD/examples/remote_add/sve"
 ```
 
-`--evaluate-only` 会将示例复制到本次本地运行的 `v1` 后再上传，不修改示例。
+复测已经生成的 kernel 时，使用 `-EvaluateOnly` 指向本地 LLM 运行产物的版本目录，
+并用 `-TestSpec` 指定该次运行的 `test_suite.json`，复用测试规格。手写验证候选只在
+本地忽略目录中保留，不作为项目示例提交。
+`--evaluate-only` 会将候选复制到本次本地运行的 `v1` 后再上传，不修改原始候选。
 服务器校验输出 shape、dtype、device、数值及输入修改，全部通过后才计时。
 
 ## 实际模型生成与优化

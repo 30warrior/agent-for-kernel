@@ -6,8 +6,8 @@ The execution server supplies PyTorch, Ninja and the native CPU/CUDA toolchain.
 See [the remote workflow and Windows commands](docs/remote-execution.md).
 
 ```powershell
-# No model/API call: upload and evaluate the handwritten NEON Add example.
-.\run_remote.ps1 -Target neon -EvaluateOnly "$PWD/examples/remote_add/neon"
+# No model/API call: prepare the reference on the worker.
+.\run_remote.ps1 -Target neon -PrepareOnly
 # Full multi-agent run after installing requirements-controller.txt and setting
 # OPENAI_API_KEY locally (and OPENAI_BASE_URL if using a compatible endpoint).
 .\run_remote.ps1 -Python .\.venv\Scripts\python.exe -Target sve -Model YOUR_MODEL -ModelApi chat_completions

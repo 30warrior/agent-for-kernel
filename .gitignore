@@ -14,4 +14,6 @@ cuda_optimization.log
 cuda_optimization_runs/
 optimization_runs/
 .publish/
+# Local handwritten transport probes are not project deliverables.
+/examples/remote_add/
 .cache/
