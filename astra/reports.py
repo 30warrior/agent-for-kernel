@@ -90,13 +90,19 @@ def write_reports(payload, directory):
     for version in payload["versions"]:
         value = total_time(version)
         valid = value is not None and value > 0
+        refinement = first_total/value if valid and first_total is not None else None
+        if "selection" in payload:
+            metric = payload["selection"]["metric"]
+            first_score = (first.get("selection_speedups") or {}).get(metric)
+            current_score = (version.get("selection_speedups") or {}).get(metric)
+            refinement = current_score/first_score if first_score and current_score else None
         rows.append(dict(version=version["version"], status=version["status"],
                          selection_arithmetic_speedup=(version.get("selection_speedups") or {}).get("arithmetic"),
                          selection_geometric_speedup=(version.get("selection_speedups") or {}).get("geometric"),
                          correctness=version["correctness"], complete=version["complete"],
                          sum_median_ms=value, generated_sum_median_ms=total_time(version, "generated"),
                          reference_speedup=baseline_total/value if valid else None,
-                         refinement_speedup=first_total/value if valid and first_total is not None else None,
+                         refinement_speedup=refinement,
                          error=version.get("error")))
         for case in version["cases"]:
             timing = case.get("benchmark") or {}
