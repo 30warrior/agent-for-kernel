@@ -3,6 +3,7 @@ import ast
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from .prompts import TARGET_GUIDANCE, optimization_guidance, public_metadata
 
 
 @dataclass
@@ -13,24 +14,27 @@ class LLMConfig:
     model_api: str = "responses"
     tracing: bool = False
     max_turns: int = 12
+    tls_max_version: str = None
 
 
 def configure_llm(config):
-    from openai import AsyncOpenAI
+    from openai import AsyncOpenAI, DefaultAsyncHttpxClient
     from agents import set_default_openai_client, set_default_openai_api, set_tracing_disabled
     if not config.api_key:
         raise ValueError("Set OPENAI_API_KEY or pass --api-key before generation")
-    client = AsyncOpenAI(api_key=config.api_key, base_url=config.base_url or None)
+    options = {}
+    if config.tls_max_version is not None:
+        import ssl
+        if config.tls_max_version != "1.2":
+            raise ValueError("Only the explicit TLS 1.2 compatibility setting is supported")
+        context = ssl.create_default_context()
+        context.minimum_version = context.maximum_version = ssl.TLSVersion.TLSv1_2
+        options["http_client"] = DefaultAsyncHttpxClient(verify=context)
+    client = AsyncOpenAI(api_key=config.api_key, base_url=config.base_url or None, **options)
     set_default_openai_client(client, use_for_tracing=config.tracing)
     set_default_openai_api(config.model_api)
     set_tracing_disabled(not config.tracing)
 
-
-TARGET_GUIDANCE = {
-    "cuda": "Generate CUDA C++ (.cu), launch on PyTorch's current CUDA stream, check shapes/dtypes and handle tails.",
-    "neon": "Generate AArch64 C++ with <arm_neon.h> NEON intrinsics. Handle fixed-width vector tails and unaligned inputs safely.",
-    "sve": "Generate AArch64 C++ with <arm_sve.h> SVE intrinsics. Use predicates and runtime lane counts; do not assume a fixed vector length."
-}
 
 CONTRACT = """
 Provide TWO complete sources through save_candidate(kernel_source, wrapper_source).
@@ -69,8 +73,8 @@ def generate_candidate(task, reference_metadata, target, folder, config, previou
             return "ERROR: wrapper syntax: " + str(error)
         if not any(isinstance(node, ast.ClassDef) and node.name == "ModelNew" for node in tree.body):
             return "ERROR: wrapper must define ModelNew"
-        kernel_path.write_text(kernel_source)
-        wrapper_path.write_text(wrapper_source)
+        kernel_path.write_text(kernel_source, encoding="utf-8")
+        wrapper_path.write_text(wrapper_source, encoding="utf-8")
         return "Saved candidate sources"
 
     tools = [save_candidate]
@@ -82,15 +86,17 @@ def generate_candidate(task, reference_metadata, target, folder, config, previou
                 return "ERROR: save both sources first"
             return compiler(kernel_path, folder)
         tools.append(compile_candidate)
-    agent = Agent(name="CodeGenerator", model=config.model,
-                  instructions=TARGET_GUIDANCE[target] + CONTRACT +
-                  " After saving, compile with compile_candidate if available and repair compiler errors.", tools=tools)
-    prompt = dict(task=task.metadata(), reference_source=task.source,
-                  execution=reference_metadata, previous_sources=previous, feedback=feedback)
-    prompt_text = json.dumps(prompt, indent=2, default=str)
-    (folder / "generation_prompt.json").write_text(prompt_text)
+    instructions = TARGET_GUIDANCE[target] + optimization_guidance(target) + CONTRACT + (
+        " After saving, compile with compile_candidate if available and repair compiler errors."
+        " Preserve the previous native function signatures when refining. Output complete sources through the tools.")
+    agent = Agent(name="CodeGenerator", model=config.model, instructions=instructions, tools=tools)
+    prompt = dict(task=public_metadata(task.metadata()), reference_source=task.source,
+                  execution=public_metadata(reference_metadata), previous_sources=previous, feedback=feedback)
+    prompt_text = json.dumps(public_metadata(prompt), indent=2, default=str)
+    (folder / "generation_prompt.json").write_text(prompt_text, encoding="utf-8")
+    (folder / "generation_instructions.txt").write_text(instructions, encoding="utf-8")
     result = Runner.run_sync(agent, prompt_text, max_turns=config.max_turns)
-    (folder / "generation_response.txt").write_text(str(result.final_output))
+    (folder / "generation_response.txt").write_text(str(result.final_output), encoding="utf-8")
     if not kernel_path.exists() or not wrapper_path.exists():
         raise RuntimeError("CodeGenerator did not save both required sources")
     return kernel_path, wrapper_path

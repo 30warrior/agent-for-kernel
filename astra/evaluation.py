@@ -47,6 +47,8 @@ def verify(reference, candidate, target, rtol=None, atol=None):
     records = []
     for index, case in enumerate(reference.cases):
         record = dict(case_id=index, correctness="failed", benchmark=None)
+        labels = reference.metadata.get("case_labels", [])
+        record.update(labels[index] if labels else dict(name=f"dataset_{index}", origin="dataset"))
         try:
             inputs = clone_inputs(case)
             model = copy.deepcopy(candidate)
@@ -61,7 +63,9 @@ def verify(reference, candidate, target, rtol=None, atol=None):
             record["error"] = traceback.format_exc()[-12000:]
         records.append(record)
     passed = bool(records) and all(record["correctness"] == "passed" for record in records)
-    return dict(correctness="passed" if passed else "failed", complete=False, cases=records)
+    return dict(correctness="passed" if passed else "failed", complete=False, cases=records,
+                suite_id=reference.metadata.get("suite_id"),
+                dataset_case_count=reference.metadata.get("dataset_case_count", len(records)))
 
 
 def benchmark(reference, candidate, target, verification, warmup=5, trials=30):

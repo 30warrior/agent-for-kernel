@@ -87,6 +87,10 @@ class Backend:
         env["PYTHONPATH"] = str(project) + os.pathsep + env.get("PYTHONPATH", "")
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["MAX_JOBS"] = "2"
+        # Invoking a venv's Python directly does not activate its script PATH.
+        # Include the base environment too when using --system-site-packages.
+        env["PATH"] = os.pathsep.join([str(Path(sys.executable).parent),
+                                      str(Path(sys.base_prefix) / "bin"), env.get("PATH", "")])
         process = subprocess.Popen([sys.executable, "-B", "-m", "astra.build_worker", str(request_path)],
                                    cwd=project, env=env, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True, start_new_session=True)

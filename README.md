@@ -1,5 +1,10 @@
 # Astra: Dataset-driven GPU and Arm CPU Kernel Optimization
 
+This branch runs agents, model API calls, native compilation and evaluation on
+the server. See [server commands and configuration](docs/server-execution.md).
+TestingAgent freezes extra tests once for all versions; target-specific CPU
+optimization guidance is editable in `prompts/cpu_neon.md` and `prompts/cpu_sve.md`.
+
 Astra is being extended to generate and iteratively optimize kernels from
 KernelBench and AKG benchmark PyTorch tasks. Planned generation targets are
 CUDA, AArch64 NEON and AArch64 SVE. Each target runs natively on its corresponding
@@ -98,8 +103,10 @@ CPU and CUDA numbers are not directly compared to one another.
 
 ## Shared refinement workflow
 
-Without an *-only switch, the entry point runs Orchestrator planning, initial code
-generation, CorrectnessTester, Benchmarker and OptimizationStrategist refinement.
+Without an *-only switch, TestingAgent generates and freezes extra cases once.
+Every compiled version is checked by TestingAgent and, on success, measured by
+ProfilingAgent. PlanningAgent uses hardware-specific guidance and actual results
+for the next CodeGenerator attempt. Orchestrator receives progress notifications.
 The host enforces actual compilation/checks/timing even if an agent skips its tool.
 `--max-iterations 3` means v1 plus up to three further candidates; failed candidates
 consume a round and feed repair diagnostics to the next attempt. Valid regressions
@@ -143,7 +150,8 @@ Each run atomically updates benchmark_results.json, summary.json,
 benchmark_summary.csv and benchmark_details.csv after every attempted candidate.
 Per-case CPU latency is the median of host-clock samples; GPU latency is the median
 of CUDA-event samples. Version ranking uses the mean of per-case medians on the
-same complete case set. Aggregate reference speedup is sum(reference medians) /
+original dataset cases. Every original and extra case must pass correctness;
+extra-case timings are reported separately. Aggregate reference speedup is sum(reference medians) /
 sum(candidate medians); refinement speedup uses v1's sum instead. If v1 is invalid,
 refinement speedup remains empty. Incorrect or incompletely measured candidates
 cannot win. Each case has its own ID, even if shapes match.
@@ -156,10 +164,8 @@ GPU results are evaluated against their own native references, not each other's 
 
 ## Validation status and boundaries
 
-No unit tests, native compilation, generated kernels or model calls were run during
-implementation at the user's request. Python source parsing, CLI help, dataset
-interface listing, diff checks and source snapshot checksums can be reviewed without
-running kernels. End-to-end correctness/performance on Arm and CUDA remains to be
-validated in the intended environments. CPU execution currently supports single-thread
-inference. Additional edge shapes, thread scaling, stronger numerical stress testing,
-repeatability across hardware, and RAG are later work; no performance gain is claimed.
+Selected Arm Add execution checks have passed, including fixed extra test reuse
+in the related SSH branch. See docs/server-execution.md for this branch's setup
+and validation scope. This does not establish full dataset coverage or CUDA
+execution quality. CPU execution currently supports single-thread inference;
+thread scaling, broader numerical coverage and RAG remain future work.
