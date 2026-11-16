@@ -76,6 +76,13 @@ bash run_server.sh --dataset akg --dataset-root benchmarks/akg \
 最终复测前，汇总状态为 pending，主加速比为空。没有有效候选时最终步骤标记
 skipped；复测失败时 success=false，主加速比为空。迭代原始结果始终保留。
 
+选优和最终复测的实现检查已覆盖：算术/几何平均产生不同排名、只按生成样例
+选优、最后只调用一次复测、等待复测时不暴露旧主成绩、复测失败及无有效候选。
+这些控制流程检查不调用模型。另在服务器使用已保存的 LLM SVE 候选实际执行最终
+worker，仅测原始 AKG Add 的 1 个样例、重新交替采样参考/候选各 10 次并通过正确性。
+结果目录为 `optimization_runs/final_validation_20261116_200133_438736/`。
+本次没有重新生成 kernel，也不能用该次短采样证明稳定性能提升。
+
 提示词修改位置：`prompts/cpu_neon.md`、`prompts/cpu_sve.md`。对应内容同时提供给
 coding 和 planning agent。修改后启动新运行。CUDA 优化建议保留 Astra 原版。
 Orchestrator 负责接收进度通知，Python 驱动测试、profiling、planning、coding 循环。
