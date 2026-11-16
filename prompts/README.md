@@ -2,7 +2,7 @@
 
 Edit `cpu_neon.md` or `cpu_sve.md` to replace the initial CPU suggestions. Keep
 the `Suggestions:` bullet list format if convenient; the following `Focus:`
-section is also editable. Files are read as UTF-8 at the start of a workflow.
+section is also editable. Files are read as UTF-8 when agents are constructed.
 Restart the workflow after editing so coding and planning use the same revision.
 
 Both the CodeGenerator and PlanningAgent receive the selected file. Selection is

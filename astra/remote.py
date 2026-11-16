@@ -96,6 +96,8 @@ class RemoteRunner:
         with tarfile.open(archive, "w:gz") as bundle:
             for source in sorted((project / "astra").glob("*.py")):
                 bundle.add(source, "astra/" + source.name, recursive=False)
+            for source in sorted((project / "prompts").glob("cpu_*.md")):
+                bundle.add(source, "prompts/" + source.name, recursive=False)
             for source in sorted(dataset.rglob("*")):
                 relative = source.relative_to(dataset)
                 if any(part.startswith(".") or part in excluded for part in relative.parts):
@@ -128,6 +130,8 @@ class RemoteRunner:
                        rtol=self.settings.rtol, atol=self.settings.atol,
                        compile_timeout=self.settings.compile_timeout,
                        execution_timeout=self.settings.execution_timeout,
+                       extra_test_cases=self.settings.extra_test_cases,
+                       test_suite_max_mib=self.settings.test_suite_max_mib,
                        result_name=token + ".result.json", **extra)
         local = self.transfer / (token + ".request.json")
         local.write_text(json.dumps(request, indent=2), encoding="utf-8")
@@ -151,6 +155,17 @@ class RemoteRunner:
         if not response.get("ok"):
             raise RuntimeError("Remote " + action + " failed:\n" + response.get("error", "Missing worker error"))
         return response["result"]
+
+    def freeze_suite(self, spec):
+        if (self.folder / "test_suite.json").exists():
+            raise RuntimeError("Test suite is frozen; it cannot be replaced")
+        response = self._request("freeze_suite", spec=spec)
+        self.reference.metadata = response["reference"]
+        self.baseline = response["baseline"]
+        for name, value in (("reference.json", self.reference.metadata), ("baseline.json", self.baseline)):
+            (self.folder / name).write_text(json.dumps(value, indent=2), encoding="utf-8")
+        self._scp(self.folder / "test_suite.json", self.workspace + "/reference/test_suite.json", upload=False)
+        return response
 
     def _candidate(self, folder):
         folder = Path(folder).resolve()

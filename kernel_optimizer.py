@@ -32,6 +32,8 @@ def build_parser():
     parser.add_argument("--model", default=os.environ.get("OPENAI_MODEL", "o4-mini"))
     parser.add_argument("--model-api", choices=("responses", "chat_completions"), default="responses")
     parser.add_argument("--enable-tracing", action="store_true", help="Opt in to SDK trace uploads")
+    parser.add_argument("--tls-max-version", choices=("1.2",),
+                        help="Optional TLS 1.2 compatibility mode for API relays; certificate verification stays enabled")
     parser.add_argument("--max-agent-turns", type=int, default=12)
     parser.add_argument("--compile-timeout", type=int, default=300)
     parser.add_argument("--evaluate-only", metavar="CANDIDATE_DIR", help="Compile and evaluate saved kernel/model.py sources without LLM requests")
@@ -40,6 +42,11 @@ def build_parser():
     parser.add_argument("--cpu-core", type=int, help="CPU affinity; defaults to the first allowed core for CPU targets")
     parser.add_argument("--max-iterations", type=int, default=3, help="Refinement rounds after v1; zero generates and evaluates v1 only")
     parser.add_argument("--execution-timeout", type=int, default=300)
+    parser.add_argument("--extra-test-cases", type=int, default=8,
+                        help="Additional cases authored once by TestingAgent and reused for every version")
+    parser.add_argument("--test-suite-max-mib", type=float, default=512,
+                        help="Total additional input tensor budget; original dataset cases are never resized")
+    parser.add_argument("--test-spec", help="Replay a saved JSON suite instead of calling the test-generation agent")
     parser.add_argument("--manifest", help="JSON task list; runs complete workflows serially")
     parser.add_argument("--result-file", help=argparse.SUPPRESS)
     return parser
@@ -50,6 +57,9 @@ def execute_task(args, parser):
         parser.error("max-iterations/warmup must be nonnegative and trials positive")
     if args.compile_timeout <= 0 or args.execution_timeout <= 0 or args.transfer_timeout <= 0 or args.max_agent_turns < 1:
         parser.error("timeouts and max-agent-turns must be positive")
+    import math
+    if args.extra_test_cases < 2 or not math.isfinite(args.test_suite_max_mib) or args.test_suite_max_mib <= 0:
+        parser.error("extra-test-cases must be at least two and test-suite-max-mib must be positive and finite")
     if any(value is not None and value < 0 for value in (args.rtol, args.atol)):
         parser.error("tolerances must be nonnegative")
     if args.list_tasks:
@@ -85,6 +95,7 @@ def execute_task(args, parser):
         print("Preparing reference on", args.ssh_host, flush=True)
         reference, baseline = backend.prepare(task)
         execute = backend.execute
+        suite_builder = backend.freeze_suite
     else:
         from astra.reference import prepare_reference, save_reference
         from astra.backends import Backend
@@ -97,8 +108,18 @@ def execute_task(args, parser):
         save_reference(reference, folder)
         baseline = [measure(reference.model, case, args.target, args.warmup, args.trials) for case in reference.cases]
         (folder / "baseline.json").write_text(json.dumps(baseline, indent=2))
+        from astra.test_cases import freeze_suite
+        suite_builder = lambda spec: freeze_suite(reference, spec, folder, args)
     if args.prepare_only:
         return 0
+    if args.test_spec:
+        saved = json.loads(Path(args.test_spec).read_text(encoding="utf-8"))
+        suite = suite_builder(saved.get("spec", saved))
+        reference.metadata = suite["reference"]
+        baseline = suite["baseline"]
+        if args.executor == "local":
+            from astra.reference import restore_reference
+            reference = restore_reference(folder)
     if args.evaluate_only:
         candidate_dir = Path(args.evaluate_only).resolve()
         project = Path(__file__).resolve().parent
@@ -119,7 +140,7 @@ def execute_task(args, parser):
         return 0 if result["complete"] else 1
     from astra.generation import LLMConfig, configure_llm, generate_candidate
     llm = LLMConfig(args.api_key, args.base_url, args.model, args.model_api,
-                    args.enable_tracing, args.max_agent_turns)
+                    args.enable_tracing, args.max_agent_turns, args.tls_max_version)
     configure_llm(llm)
     if args.generate_only:
         generate_candidate(task, reference.metadata, args.target, folder / "v1", llm,
@@ -128,7 +149,8 @@ def execute_task(args, parser):
     from astra.workflow import run
     from astra.reports import write_reports
     result = run(task, reference, baseline, folder, args, llm,
-                 on_update=lambda payload: write_reports(payload, folder), backend=backend, executor=execute)
+                 on_update=lambda payload: write_reports(payload, folder), backend=backend, executor=execute,
+                 suite_builder=suite_builder)
     summary = write_reports(result, folder)
     summary.update(status="completed" if summary["success"] else "failed", run_directory=str(folder))
     if args.result_file:

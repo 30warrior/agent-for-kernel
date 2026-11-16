@@ -31,6 +31,11 @@ def perform(base, request):
     from .backends import Backend
     backend = Backend(request["target"], request["compile_timeout"])
     reference_dir = base / "reference"
+    if request["action"] == "freeze_suite":
+        from .reference import restore_reference
+        from .test_cases import freeze_suite
+        reference = restore_reference(reference_dir)
+        return freeze_suite(reference, request["spec"], reference_dir, SimpleNamespace(**request))
     if request["action"] == "prepare":
         from .datasets import load_task
         from .reference import prepare_reference, save_reference

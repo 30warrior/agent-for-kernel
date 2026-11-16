@@ -6,22 +6,11 @@ import sys
 
 def main():
     request = json.loads(Path(sys.argv[1]).read_text())
-    from .datasets import load_task
-    from .reference import prepare_reference
+    from .reference import restore_reference
     from .backends import Backend
     from .evaluation import verify, benchmark
-    import torch
-    meta = json.loads((Path(request["run_dir"]) / "reference.json").read_text())
-    task = load_task(meta["dataset"], meta["dataset_root"], meta["task_id"])
-    if task.source_hash != meta["source_sha256"]:
-        raise RuntimeError("Task source changed after reference preparation")
-    reference = prepare_reference(task, meta["target"], meta["seed"], meta["threads"])
-    snapshot = torch.load(Path(request["run_dir"]) / "reference.pt", weights_only=False,
-                          map_location="cuda" if meta["target"] == "cuda" else "cpu")
-    reference.model.load_state_dict(snapshot["model_state"])
-    reference.cases = snapshot["cases"]
-    reference.expected = snapshot["expected"]
-    reference.mutated_inputs = snapshot["mutated_inputs"]
+    reference = restore_reference(request["run_dir"])
+    meta = reference.metadata
     folder = Path(request["candidate_dir"])
     artifact = json.loads((folder / "build.json").read_text())
     candidate = Backend(meta["target"]).load_candidate(artifact, folder / "model.py", reference.model)

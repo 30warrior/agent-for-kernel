@@ -114,8 +114,11 @@ CPU and CUDA numbers are not directly compared to one another.
 
 ## Shared refinement workflow
 
-Without an *-only switch, the entry point runs Orchestrator planning, initial code
-generation, CorrectnessTester, Benchmarker and OptimizationStrategist refinement.
+Without an *-only switch, TestingAgent creates and freezes additional tests once,
+then every generated version runs through TestingAgent and ProfilingAgent. PlanningAgent
+uses actual results and target-specific guidance for the next CodingAgent attempt.
+Orchestrator receives progress notifications, as in the original implementation.
+See [workflow details](docs/workflow.md) and [editable hardware guidance](prompts/README.md).
 The host enforces actual compilation/checks/timing even if an agent skips its tool.
 `--max-iterations 3` means v1 plus up to three further candidates; failed candidates
 consume a round and feed repair diagnostics to the next attempt. Valid regressions
@@ -159,7 +162,8 @@ Each run atomically updates benchmark_results.json, summary.json,
 benchmark_summary.csv and benchmark_details.csv after every attempted candidate.
 Per-case CPU latency is the median of host-clock samples; GPU latency is the median
 of CUDA-event samples. Version ranking uses the mean of per-case medians on the
-same complete case set. Aggregate reference speedup is sum(reference medians) /
+original dataset cases; all frozen cases must pass correctness. Generated-case
+timings are reported separately. Aggregate reference speedup is sum(reference medians) /
 sum(candidate medians); refinement speedup uses v1's sum instead. If v1 is invalid,
 refinement speedup remains empty. Incorrect or incompletely measured candidates
 cannot win. Each case has its own ID, even if shapes match.
@@ -172,10 +176,10 @@ GPU results are evaluated against their own native references, not each other's 
 
 ## Validation status and boundaries
 
-No unit tests, native compilation, generated kernels or model calls were run during
-implementation at the user's request. Python source parsing, CLI help, dataset
-interface listing, diff checks and source snapshot checksums can be reviewed without
-running kernels. End-to-end correctness/performance on Arm and CUDA remains to be
-validated in the intended environments. CPU execution currently supports single-thread
-inference. Additional edge shapes, thread scaling, stronger numerical stress testing,
-repeatability across hardware, and RAG are later work; no performance gain is claimed.
+Real NEON/SVE generation and SSH feedback runs are documented in
+[remote execution](docs/remote-execution.md). Fixed-suite Arm execution checks are
+documented in [workflow details](docs/workflow.md). These cover selected Add examples;
+they do not establish performance or coverage for the full datasets. CUDA execution
+has not been revalidated in this revision. CPU execution currently supports
+single-thread inference. Thread scaling, broader numerical stress testing,
+repeatability across hardware and RAG remain future work.

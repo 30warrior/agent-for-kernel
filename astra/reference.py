@@ -107,3 +107,22 @@ def save_reference(reference, directory):
     torch.save(dict(model_state=reference.model.state_dict(), cases=reference.cases,
                     expected=reference.expected, mutated_inputs=reference.mutated_inputs),
                directory / "reference.pt")
+
+
+def restore_reference(directory):
+    """Reconstruct the reference model and load the fixed input/output snapshot."""
+    import json
+    from .datasets import load_task
+    directory = Path(directory)
+    meta = json.loads((directory / "reference.json").read_text(encoding="utf-8"))
+    task = load_task(meta["dataset"], meta["dataset_root"], meta["task_id"])
+    if task.source_hash != meta["source_sha256"]:
+        raise RuntimeError("Task source changed after reference preparation")
+    reference = prepare_reference(task, meta["target"], meta["seed"], meta["threads"])
+    snapshot = torch.load(directory / "reference.pt", weights_only=False,
+                          map_location="cuda" if meta["target"] == "cuda" else "cpu")
+    reference.model.load_state_dict(snapshot["model_state"])
+    reference.cases, reference.expected = snapshot["cases"], snapshot["expected"]
+    reference.mutated_inputs = snapshot["mutated_inputs"]
+    reference.metadata = meta
+    return reference

@@ -14,14 +14,23 @@ class LLMConfig:
     model_api: str = "responses"
     tracing: bool = False
     max_turns: int = 12
+    tls_max_version: str = None
 
 
 def configure_llm(config):
-    from openai import AsyncOpenAI
+    from openai import AsyncOpenAI, DefaultAsyncHttpxClient
     from agents import set_default_openai_client, set_default_openai_api, set_tracing_disabled
     if not config.api_key:
         raise ValueError("Set OPENAI_API_KEY or pass --api-key before generation")
-    client = AsyncOpenAI(api_key=config.api_key, base_url=config.base_url or None)
+    options = {}
+    if config.tls_max_version is not None:
+        import ssl
+        if config.tls_max_version != "1.2":
+            raise ValueError("Only the explicit TLS 1.2 compatibility setting is supported")
+        context = ssl.create_default_context()
+        context.minimum_version = context.maximum_version = ssl.TLSVersion.TLSv1_2
+        options["http_client"] = DefaultAsyncHttpxClient(verify=context)
+    client = AsyncOpenAI(api_key=config.api_key, base_url=config.base_url or None, **options)
     set_default_openai_client(client, use_for_tracing=config.tracing)
     set_default_openai_api(config.model_api)
     set_tracing_disabled(not config.tracing)
