@@ -3,6 +3,7 @@ import ast
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from .prompts import TARGET_GUIDANCE, optimization_guidance, public_metadata
 
 
 @dataclass
@@ -25,12 +26,6 @@ def configure_llm(config):
     set_default_openai_api(config.model_api)
     set_tracing_disabled(not config.tracing)
 
-
-TARGET_GUIDANCE = {
-    "cuda": "Generate CUDA C++ (.cu), launch on PyTorch's current CUDA stream, check shapes/dtypes and handle tails.",
-    "neon": "Generate AArch64 C++ with <arm_neon.h> NEON intrinsics. Handle fixed-width vector tails and unaligned inputs safely.",
-    "sve": "Generate AArch64 C++ with <arm_sve.h> SVE intrinsics. Use predicates and runtime lane counts; do not assume a fixed vector length."
-}
 
 CONTRACT = """
 Provide TWO complete sources through save_candidate(kernel_source, wrapper_source).
@@ -82,13 +77,15 @@ def generate_candidate(task, reference_metadata, target, folder, config, previou
                 return "ERROR: save both sources first"
             return compiler(kernel_path, folder)
         tools.append(compile_candidate)
-    agent = Agent(name="CodeGenerator", model=config.model,
-                  instructions=TARGET_GUIDANCE[target] + CONTRACT +
-                  " After saving, compile with compile_candidate if available and repair compiler errors.", tools=tools)
-    prompt = dict(task=task.metadata(), reference_source=task.source,
-                  execution=reference_metadata, previous_sources=previous, feedback=feedback)
-    prompt_text = json.dumps(prompt, indent=2, default=str)
+    instructions = TARGET_GUIDANCE[target] + optimization_guidance(target) + CONTRACT + (
+        " After saving, compile with compile_candidate if available and repair compiler errors."
+        " Preserve the previous native function signatures when refining. Output complete sources through the tools.")
+    agent = Agent(name="CodeGenerator", model=config.model, instructions=instructions, tools=tools)
+    prompt = dict(task=public_metadata(task.metadata()), reference_source=task.source,
+                  execution=public_metadata(reference_metadata), previous_sources=previous, feedback=feedback)
+    prompt_text = json.dumps(public_metadata(prompt), indent=2, default=str)
     (folder / "generation_prompt.json").write_text(prompt_text, encoding="utf-8")
+    (folder / "generation_instructions.txt").write_text(instructions, encoding="utf-8")
     result = Runner.run_sync(agent, prompt_text, max_turns=config.max_turns)
     (folder / "generation_response.txt").write_text(str(result.final_output), encoding="utf-8")
     if not kernel_path.exists() or not wrapper_path.exists():
