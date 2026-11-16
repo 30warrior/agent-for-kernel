@@ -39,6 +39,28 @@ def summarize(payload):
     versions = payload["versions"]
     v1 = next((version for version in versions if version["version"] == "v1"), {})
     best = next((version for version in versions if version["version"] == payload["best_version"]), {})
+    if "selection" in payload:
+        final = payload.get("final_evaluation", {})
+        metric = payload["selection"]["metric"]
+        speedups = final.get("speedups") or {}
+        valid = final.get("status") == "passed" and bool(speedups)
+        baseline_time = sum(case["median_ms"] for case in final.get("baseline", [])) if valid else None
+        best_time = total_time(final) if valid else None
+        first_score = (v1.get("selection_speedups") or {}).get(metric)
+        best_score = (best.get("selection_speedups") or {}).get(metric)
+        return dict(task=payload["task"], target=payload["target"], best_version=payload["best_version"],
+            success=valid, test_suite=payload.get("test_suite"), selection=payload["selection"],
+            final_evaluation_status=final.get("status", "pending"), reference_speedup_metric=metric,
+            compiled=any(version.get("compiled") for version in versions),
+            correctness_passed=any(version.get("correctness") == "passed" for version in versions),
+            generated_best_sum_median_ms=total_time(best, "generated"),
+            baseline_sum_median_ms=baseline_time, best_sum_median_ms=best_time,
+            v1_sum_median_ms=total_time(v1),
+            reference_speedup=speedups.get(metric) if valid else None,
+            final_speedups=speedups if valid else None,
+            final_total_time_speedup=baseline_time/best_time if valid and best_time else None,
+            refinement_speedup=best_score/first_score if first_score and best_score else None,
+            refinement_speedup_scope="generated_cases")
     dataset_count = payload.get("test_suite", {}).get("dataset_case_count", len(payload["baseline"]))
     baseline_time = sum(case["median_ms"] for case in payload["baseline"][:dataset_count])
     best_time, first_time = total_time(best), total_time(v1)
@@ -69,6 +91,8 @@ def write_reports(payload, directory):
         value = total_time(version)
         valid = value is not None and value > 0
         rows.append(dict(version=version["version"], status=version["status"],
+                         selection_arithmetic_speedup=(version.get("selection_speedups") or {}).get("arithmetic"),
+                         selection_geometric_speedup=(version.get("selection_speedups") or {}).get("geometric"),
                          correctness=version["correctness"], complete=version["complete"],
                          sum_median_ms=value, generated_sum_median_ms=total_time(version, "generated"),
                          reference_speedup=baseline_total/value if valid else None,
@@ -86,7 +110,20 @@ def write_reports(payload, directory):
                                 speedup=baseline[index]["median_ms"]/elapsed if elapsed else None,
                                 error=case.get("error")))
     write_csv(directory / "benchmark_summary.csv", rows,
-              ["version","status","correctness","complete","sum_median_ms","generated_sum_median_ms","reference_speedup","refinement_speedup","error"])
+              ["version","status","correctness","complete","selection_arithmetic_speedup","selection_geometric_speedup","sum_median_ms","generated_sum_median_ms","reference_speedup","refinement_speedup","error"])
     write_csv(directory / "benchmark_details.csv", details,
               ["version","case_id","name","origin","correctness","median_ms","mean_ms","std_ms","p95_ms","baseline_median_ms","speedup","error"])
+    final = payload.get("final_evaluation", {})
+    final_rows = []
+    for case in final.get("cases", []):
+        timing = case.get("benchmark") or {}
+        index = case["case_id"]
+        baselines = final.get("baseline", [])
+        final_rows.append(dict(version=final.get("version"), case_id=index, name=case.get("name"),
+            correctness=case["correctness"], median_ms=timing.get("median_ms"),
+            baseline_median_ms=baselines[index]["median_ms"] if index < len(baselines) else None,
+            speedup=case.get("reference_speedup"), error=case.get("error")))
+    if "selection" in payload:
+        write_csv(directory / "final_benchmark_details.csv", final_rows,
+                  ["version","case_id","name","correctness","median_ms","baseline_median_ms","speedup","error"])
     return summary

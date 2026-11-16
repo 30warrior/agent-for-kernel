@@ -149,11 +149,13 @@ run merely by copying/listing the dataset.
 Each run atomically updates benchmark_results.json, summary.json,
 benchmark_summary.csv and benchmark_details.csv after every attempted candidate.
 Per-case CPU latency is the median of host-clock samples; GPU latency is the median
-of CUDA-event samples. Version ranking uses the mean of per-case medians on the
-original dataset cases. Every original and extra case must pass correctness;
-extra-case timings are reported separately. Aggregate reference speedup is sum(reference medians) /
-sum(candidate medians); refinement speedup uses v1's sum instead. If v1 is invalid,
-refinement speedup remains empty. Incorrect or incompletely measured candidates
+of CUDA-event samples. Version ranking uses the geometric mean of per-case speedups
+on frozen generated cases (arithmetic mean is selectable). Every original and extra
+case must pass correctness. After iteration, the selected version is independently
+remeasured on original dataset cases with a fresh, alternately sampled reference.
+Headline speedup comes from this final evaluation. Refinement speedup compares
+generated-case selection scores with v1. If v1 is invalid, it remains empty.
+Incorrect or incompletely measured candidates
 cannot win. Each case has its own ID, even if shapes match.
 
 Batch reports include compile rate, correctness rate and fast_1 (correct, completely

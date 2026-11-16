@@ -41,3 +41,26 @@ def measure(model, case, target, warmup=5, trials=30):
                 std_ms=statistics.pstdev(times), samples_ms=times,
                 boundary="Model.forward including output allocation; excludes input cloning/state reset",
                 timing="cuda_event" if target == "cuda" else "perf_counter_ns")
+
+
+def measure_pair(reference, candidate, case, target, warmup=5, trials=30):
+    """Alternate reference/candidate order; keep preparation outside each timed forward."""
+    if warmup < 0 or trials < 1:
+        raise ValueError("warmup >= 0 and trials >= 1 are required")
+    samples = [[], []]
+    models = [reference, candidate]
+    for index in range(warmup + trials):
+        for side in ((0, 1) if index % 2 == 0 else (1, 0)):
+            value = measure(models[side], case, target, warmup=0, trials=1)["samples_ms"][0]
+            if index >= warmup:
+                samples[side].append(value)
+    results = []
+    for values in samples:
+        ordered = sorted(values)
+        results.append(dict(mean_ms=statistics.mean(values), median_ms=statistics.median(values),
+            min_ms=min(values), p95_ms=ordered[min(len(values)-1, math.ceil(0.95*len(values))-1)],
+            std_ms=statistics.pstdev(values), samples_ms=values,
+            boundary="Model.forward including output allocation; excludes input cloning/state reset",
+            timing="cuda_event" if target == "cuda" else "perf_counter_ns",
+            protocol="alternating_reference_candidate"))
+    return results

@@ -7,14 +7,38 @@ from .execution import execute
 from .generation import generate_candidate
 from .prompts import ORCHESTRATOR, TESTER, PROFILER, execution_context, public_metadata, strategy_instructions
 from .test_cases import generate_suite
+from .metrics import speedup_metrics
 
 
-def score(result):
-    if not result.get("complete") or result.get("correctness") != "passed":
-        return None
-    values = [case["benchmark"]["median_ms"] for case in result["cases"]
-              if case.get("origin", "dataset") == "dataset"]
-    return sum(values) / len(values) if values else None
+def score(result, baseline, metric="geometric"):
+    metrics = speedup_metrics(result, baseline, "generated")
+    return metrics[metric] if metrics else None
+
+
+def finalize_best(folder, best, metadata, settings, executor=execute):
+    """Remeasure the frozen winner once on original inputs; never reselect using this result."""
+    from .reports import atomic_write
+    if best is None:
+        result = dict(status="skipped", reason="No fully valid measured candidate", version=None,
+                      complete=False, correctness="not_checked", cases=[], baseline=[])
+    else:
+        try:
+            print("Final original-dataset evaluation:", best, flush=True)
+            result = executor(folder, Path(folder) / best, "final_benchmark", settings)
+            labels = [label for label in metadata["case_labels"] if label["origin"] == "dataset"]
+            if result.get("suite_id") != metadata["suite_id"] or len(result.get("cases", [])) != len(labels):
+                raise RuntimeError("Final evaluation did not use the original frozen cases")
+            for index, case in enumerate(result["cases"]):
+                if case.get("case_id") != index or case.get("name") != labels[index]["name"] or case.get("origin") != "dataset":
+                    raise RuntimeError("Final evaluation changed original case identity or order")
+            metrics = speedup_metrics(result, result.get("baseline", []), "dataset")
+            result.update(version=best, speedups=metrics, warmup=settings.warmup, trials=settings.trials)
+            result["status"] = "passed" if metrics else "failed"
+        except Exception:
+            result = dict(status="error", version=best, complete=False, correctness="not_checked",
+                          cases=[], baseline=[], error=traceback.format_exc()[-24000:])
+    atomic_write(Path(folder) / "final_benchmark.json", json.dumps(result, indent=2))
+    return result
 
 
 def sources(folder, target):
@@ -32,6 +56,7 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
     backend = backend or Backend(settings.target, settings.compile_timeout)
     executor = executor or execute
     records, best, best_score, first_valid_score = [], None, None, None
+    selection_metric = getattr(settings, "selection_metric", "geometric")
 
     def checked_execute(candidate_dir, mode):
         result = executor(folder, candidate_dir, mode, settings)
@@ -69,6 +94,8 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
     context = dict(task=public_metadata(task.metadata()), reference_source=task.source,
                    execution=execution_context(reference.metadata, settings))
     context["execution"]["baseline"] = baseline
+    context["selection"] = dict(metric=selection_metric, origin="generated", higher_is_better=True,
+        instruction="Select by mean speedup on frozen generated cases. Final original-case evaluation occurs once after all iterations; do not optimize by original-case rankings.")
     (folder / "role_instructions.json").write_text(json.dumps(dict(orchestrator=ORCHESTRATOR,
         testing=TESTER, profiling=PROFILER, planning=strategy_instructions(settings.target)), indent=2), encoding="utf-8")
     strategist = Agent(name="PlanningAgent", model=llm.model, instructions=strategy_instructions(settings.target))
@@ -134,13 +161,16 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
         except Exception:
             record["status"] = "error"
             record["error"] = traceback.format_exc()[-24000:]
-        current_score = score(record)
+        record["selection_speedups"] = speedup_metrics(record, baseline, "generated")
+        current_score = score(record, baseline, selection_metric)
         if index == 1:
             first_valid_score = current_score
-        if current_score is not None and (best_score is None or current_score < best_score):
+        if current_score is not None and (best_score is None or current_score > best_score):
             best, best_score = version, current_score
         records.append(record)
         payload = dict(task=task.metadata(), target=settings.target, baseline=baseline,
+                       selection=dict(metric=selection_metric, origin="generated", higher_is_better=True,
+                                      best_score=best_score, final_evaluation_pending=True),
                        test_suite={key: reference.metadata[key] for key in ("suite_id", "case_labels", "dataset_case_count")},
                        versions=records, best_version=best, first_candidate_score=first_valid_score,
                        configuration={key:value for key,value in vars(settings).items() if key not in ("api_key", "result_file")})
@@ -152,7 +182,7 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
         notify("version_evaluated", version=version, status=record["status"], best_version=best)
         if index == settings.max_iterations + 1:
             break
-        # Repair an invalid candidate; otherwise refine the fastest valid source.
+        # Repair an invalid candidate; otherwise refine the best generated-suite score.
         base_version = version if current_score is None else best
         previous = sources(folder / base_version, settings.target)
         strategy_input = public_metadata(dict(context, base_version=base_version, previous=previous,
@@ -168,5 +198,11 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
             (candidate_dir / "strategy_error.txt").write_text(str(error), encoding="utf-8")
         feedback = public_metadata(dict(suggestions=suggestions, latest_result=record, base_version=base_version))
         notify("suggestions_ready", from_version=version, next_version=f"v{index + 1}")
-    notify("workflow_completed", best_version=best)
+    payload["final_evaluation"] = finalize_best(folder, best, reference.metadata, settings, executor)
+    payload["selection"]["final_evaluation_pending"] = False
+    from .reports import atomic_write
+    atomic_write(folder / "progress.json", json.dumps(payload, indent=2))
+    if on_update:
+        on_update(payload)
+    notify("workflow_completed", best_version=best, final_status=payload["final_evaluation"]["status"])
     return payload

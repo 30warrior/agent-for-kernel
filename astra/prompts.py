@@ -52,6 +52,8 @@ PROFILER = """You are the Profiling Agent responsible for measuring each kernel 
 Call benchmark_candidate to obtain actual performance data, rechecking correctness first.
 Use the SAME frozen cases across ALL versions. Never generate new cases or synthesize timings.
 Report measured case latencies and speedups relative to the corresponding reference baselines.
+Version selection uses the configured arithmetic/geometric mean speedup on generated cases.
+The application independently remeasures the frozen winner on original dataset cases after all iterations.
 """
 
 

@@ -34,6 +34,8 @@ def build_parser():
     parser.add_argument("--atol", type=float)
     parser.add_argument("--cpu-core", type=int, help="CPU affinity; defaults to the first allowed core for CPU targets")
     parser.add_argument("--max-iterations", type=int, default=3, help="Refinement rounds after v1; zero generates and evaluates v1 only")
+    parser.add_argument("--selection-metric", choices=("geometric", "arithmetic"), default="geometric",
+                        help="Mean per-case speedup on frozen generated tests used to select the best version")
     parser.add_argument("--execution-timeout", type=int, default=300)
     parser.add_argument("--extra-test-cases", type=int, default=8,
                         help="Additional cases generated once and reused for all versions")
