@@ -44,16 +44,19 @@ class Backend:
         else:
             if platform.machine().lower() not in ("aarch64", "arm64"):
                 raise RuntimeError("NEON/SVE candidates require a native AArch64 host")
-            text = Path("/proc/cpuinfo").read_text().lower()
-            features = next((line.split(":",1)[1].split() for line in text.splitlines() if line.startswith("features")), [])
+            from .hardware import collect_cpu_hardware
+            info["cpu"] = collect_cpu_hardware()
+            features = info["cpu"]["isa"]["host_features_common_to_allocated_cpus"]
             required = "sve" if self.target == "sve" else "asimd"
             if required not in features:
                 raise RuntimeError("Host does not report " + required)
             info["features"] = features
             info["openmp_enabled"] = self.threads > 1
-            vector = Path("/proc/sys/abi/sve_default_vector_length")
-            if vector.exists():
-                info["sve_default_vector_bytes"] = int(vector.read_text())
+            info["sve_default_vector_bytes"] = info["cpu"]["isa"]["sve"]["system_default_vector_bytes"]
+            info["compilation_target"] = dict(architecture="aarch64", minimum_arch="armv8-a" if self.target == "neon" else "armv8.2-a",
+                allowed_isa=["neon"] if self.target == "neon" else ["neon", "sve"],
+                sve_vector_length_agnostic=self.target == "sve", openmp_enabled=self.threads > 1,
+                note="Additional host features are not enabled unless explicitly allowed by the framework's compiler flags.")
         try:
             result = subprocess.run([info["compiler"], "--version"], capture_output=True, text=True, timeout=10)
             info["compiler_version"] = result.stdout.splitlines()[0] if result.stdout else result.stderr

@@ -99,6 +99,33 @@ RAG 尚未实现。
 
 ## CPU OpenMP 与公平线程配置
 
+### CPU 硬件上下文
+
+`astra/hardware.py` 只读采集 CPU 规格，`Backend.capabilities()` 将其放入
+`reference.json` 的 `hardware.cpu`。`execution_context()` 整理共享缓存实例后，
+经 `execution.hardware` 传给 Coding、Planning、Testing 和 Profiling Agent；
+`--generate-only` 也使用相同整理逻辑。无需在优化 Markdown 中写死服务器规格。
+
+采集内容包括 CPU implementer/part/MIDR、OS 报告的型号、整机在线物理/逻辑核心数、
+所分配核心与 NUMA 拓扑、相关 L1/L2/L3 缓存容量及共享范围、缓存行大小、
+所分配 CPU 的共同 ISA features、系统默认与当前线程实际 SVE 向量长度、
+可读的频率上下限、主机和相关 NUMA 节点内存总量。每组信息保留来源。
+缓存容量按共享实例记录，不能把整机总缓存或多核缓存相加后当作单核容量。
+内存总量不代表作业可用量，OpenMP CPU 绑定也不等于 NUMA 内存绑定。
+
+主机 features 与 `hardware.compilation_target.allowed_isa` 分开，agent 必须遵守
+目标编译参数；主机有 SVE2 等扩展不表示本次允许使用。SVE 当前长度通过
+`prctl(PR_SVE_GET_VL)` 只读查询，不改变进程设置，生成代码仍需使用运行时长度。
+频率、型号等读取不到的项目为 `null`；不猜测峰值 FLOPS 或内存带宽，也不执行
+额外性能基准。实测耗时依然由 Profiling Agent 对应工具提供。
+
+若 OS 缺少商品型号，可参考 `cpu_hardware.example.json` 在项目根目录创建
+`cpu_hardware.json`，填写确认的 `cpu_identity.model_name` 和 `source`。
+该配置被 Git 忽略，只补充型号，不覆盖探测的缓存、ISA 或线程预算；系统报告与
+用户补充的值分别保存，OS 报告值优先。配置文件可选；存在但格式错误会明确报错。
+换服务器时应重新确认或移除此文件，不复用旧机器型号。服务器 `armv8_sve` 的
+Kunpeng 920 型号来自用户于 2026-11-17 的确认，而不是根据 CPU part 推断。
+
 `--threads` 默认仍为 1；设为 N（N > 1）时，CPU 编译和链接均启用 `-fopenmp`，
 Coding/Planning Agent 获得对应线程预算，允许生成 OpenMP + NEON/SVE 实现。
 小输入可走串行路径，设置多线程不代表所有输入都必须启动并行区域。

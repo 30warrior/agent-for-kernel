@@ -100,6 +100,9 @@ def public_metadata(value):
 
 def execution_context(metadata, settings=None):
     context = public_metadata(metadata)
+    if context.get("hardware", {}).get("cpu"):
+        from .hardware import hardware_context
+        context["hardware"] = hardware_context(context["hardware"])
     if settings is not None:
         context["evaluation"] = dict(rtol=settings.rtol, atol=settings.atol,
             default_tolerances={"float32": [1e-4, 1e-5], "float16": [1e-2, 5e-3], "bfloat16": [2e-2, 1e-2]},

@@ -3,7 +3,7 @@ import ast
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from .prompts import TARGET_GUIDANCE, optimization_guidance, public_metadata, threading_guidance
+from .prompts import TARGET_GUIDANCE, optimization_guidance, public_metadata, threading_guidance, execution_context
 
 
 @dataclass
@@ -91,7 +91,7 @@ def generate_candidate(task, reference_metadata, target, folder, config, previou
         " Preserve the previous native function signatures when refining. Output complete sources through the tools.")
     agent = Agent(name="CodeGenerator", model=config.model, instructions=instructions, tools=tools)
     prompt = dict(task=public_metadata(task.metadata()), reference_source=task.source,
-                  execution=public_metadata(reference_metadata), previous_sources=previous, feedback=feedback)
+                  execution=execution_context(reference_metadata), previous_sources=previous, feedback=feedback)
     prompt_text = json.dumps(public_metadata(prompt), indent=2, default=str)
     (folder / "generation_prompt.json").write_text(prompt_text, encoding="utf-8")
     (folder / "generation_instructions.txt").write_text(instructions, encoding="utf-8")
