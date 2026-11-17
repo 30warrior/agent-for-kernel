@@ -3,7 +3,7 @@ import ast
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from .prompts import TARGET_GUIDANCE, optimization_guidance, public_metadata, threading_guidance, execution_context
+from .prompts import TARGET_GUIDANCE, optimization_guidance, public_metadata, threading_guidance, execution_context, INDEPENDENT_KERNEL_POLICY
 
 
 @dataclass
@@ -52,7 +52,7 @@ Implement the complete task, including broadcasting, strides and required input
 mutations. Never special-case test values or hard-code outputs. Use supported ISA
 only. Respect the supplied CPU thread budget and affinity configuration.
 Do not relax math accuracy or dtype without satisfying the task tolerances.
-"""
+""" + INDEPENDENT_KERNEL_POLICY
 
 
 def generate_candidate(task, reference_metadata, target, folder, config, previous=None, feedback=None, compiler=None):

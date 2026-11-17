@@ -16,6 +16,17 @@ strategy instructions. Wrapper/tool contracts differ because this fork accepts
 KernelBench/AKG PyTorch tasks instead of an existing sgl-kernel implementation.
 Accuracy requirements still apply to any fast-math suggestion.
 
+`astra/prompts.py:INDEPENDENT_KERNEL_POLICY` defines the shared independent-kernel
+constraints for Coding and Planning on CUDA, NEON and SVE, including generate-only
+and every refinement. Task computation must use generated native code: no Python
+PyTorch/NumPy or C++ ATen/LibTorch compute, original-implementation fallbacks on
+selected shapes, or BLAS/oneDNN/cuBLAS and similar library compute. Tensor metadata,
+empty allocations and initialization-time parameter copies remain allowed for
+integration. All shape dispatch and serial/generic paths must compute in generated
+native code. These are prompt constraints, not an automatic compliance checker;
+correctness and timing checks alone do not establish compliance. Existing saved
+candidates and runs are not retroactively validated by changing these prompts.
+
 Shared testing/profiling/orchestrator role contracts also live in
 `astra/prompts.py`. Editing optimization suggestions does not change fixed test
 inputs, correctness tolerances, compiler flags or the measurement boundary.

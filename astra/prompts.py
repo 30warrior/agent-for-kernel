@@ -26,6 +26,41 @@ Constraints:
 - Be concrete and actionable.
 """
 
+INDEPENDENT_KERNEL_POLICY = """
+Independent-kernel experiment constraints (apply to every candidate and refinement):
+- The objective is independently generated native compute kernels, not delegation
+  to an existing framework operator or numerical-library implementation. Implement
+  ALL task computation in the generated C++/CUDA sources for ALL valid task inputs.
+- Do not compute results with Python torch, torch.nn, torch.nn.functional, NumPy,
+  or other tensor/numerical APIs. The same prohibition applies inside C++:
+  no ATen/LibTorch computational operators via at::, torch::, Tensor methods,
+  torch.ops, dispatcher calls, or indirect wrappers around such operators.
+  Moving a PyTorch operation from Python to a C++ extension does not make it
+  an independently generated kernel.
+- PyTorch/ATen may only provide integration plumbing: Tensor handles, metadata
+  (shape, stride, dtype, device), data pointers, empty output/workspace allocation,
+  metadata-only views, and independent copies of reference parameters/buffers
+  during initialization. Python may bind arguments and invoke the extension.
+  Perform numerical initialization, casts, packing and layout transformations in
+  your own native code when needed; allocation is not permission to compute.
+- Do not call the reference model, its forward/submodules, the original operator,
+  or a saved baseline callable on ANY execution path. No shape-, size-, stride-,
+  dtype- or error-dependent fallback to an original/framework/library implementation.
+  Shape dispatch, small-input serial paths and generic/tail paths are allowed only
+  when every path uses your own generated native computation. Preserve support
+  for the task's valid inputs, including legal broadcasting and noncontiguous data.
+- Do not delegate task computation to BLAS, CBLAS, LAPACK, MKL, OpenBLAS, BLIS,
+  oneDNN, Eigen numerical routines, cuBLAS, cuDNN, cuFFT, or other library-provided
+  compute kernels, directly or indirectly. Do not add dependencies or load a
+  prebuilt compute implementation to bypass this restriction. Scalar standard
+  math functions, compiler intrinsics, NEON/SVE/CUDA instruction intrinsics,
+  OpenMP, and CUDA stream/launch/runtime APIs are allowed within the target ISA,
+  accuracy and execution constraints; they do not authorize library compute calls.
+- Planning must propose only compliant implementations. If previous candidate
+  sources delegate computation or contain a prohibited fallback, explicitly plan
+  their replacement with generated native code rather than retaining that path.
+"""
+
 TARGET_GUIDANCE = {
     "cuda": "Generate CUDA C++ (.cu) with at least one __global__ compute kernel. Launch on PyTorch's current CUDA stream; check shapes/dtypes and handle tails.\n",
     "neon": "Generate AArch64 C++ using <arm_neon.h> NEON intrinsics within the supplied compiler flags. Do not use SVE, SVE2 or SME even if the host supports them. Handle fixed-width vector tails and unaligned inputs safely.\n",
@@ -85,7 +120,7 @@ def strategy_instructions(target, metadata=None):
     else:
         instructions = ("You are an expert Arm CPU kernel optimization strategist. Give concrete, implementable suggestions only (no code).\n"
                         + TARGET_GUIDANCE[target] + optimization_guidance(target))
-    return instructions + threading_guidance(target, metadata) + "\nPreserve the task semantics and public interface. Respect dtype, accuracy and the configured execution model. Analyze actual compiler errors, numerical failures and per-case timings. Distinguish measured facts from hypotheses. Never invent measurements."
+    return instructions + threading_guidance(target, metadata) + INDEPENDENT_KERNEL_POLICY + "\nPreserve the task semantics and public interface. Respect dtype, accuracy and the configured execution model. Analyze actual compiler errors, numerical failures and per-case timings. Distinguish measured facts from hypotheses. Never invent measurements."
 
 
 def public_metadata(value):

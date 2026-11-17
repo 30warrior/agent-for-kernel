@@ -97,6 +97,28 @@ coding 和 planning agent。修改后启动新运行。CUDA 优化建议保留 A
 Orchestrator 负责接收进度通知，Python 驱动测试、profiling、planning、coding 循环。
 RAG 尚未实现。
 
+## 独立 kernel 生成约束
+
+本实验要求生成独立的原生计算实现。`astra/prompts.py` 的
+`INDEPENDENT_KERNEL_POLICY` 同时注入 Coding 和 Planning 的提示词，覆盖
+CUDA、NEON、SVE、首次生成及每轮改进，`--generate-only` 也使用该规则。
+
+禁止通过 Python PyTorch/NumPy 或 C++ ATen/LibTorch 数值算子完成计算，
+包括 Tensor 方法和 dispatcher 等间接调用；禁止调用 BLAS、MKL、OpenBLAS、
+oneDNN、cuBLAS、cuDNN 等库实现任务计算。所有形状、步长、大小及错误处理分支
+都不能回退到 reference、原始算子或其他框架/库实现。允许自行编写的原生标量、
+SIMD、OpenMP、CUDA 路径，以及这些路径之间的形状分派。
+
+Tensor 类型、元数据查询、数据指针、空输出/工作区分配、只修改元数据的 view，
+以及初始化时复制参考参数仍可用于接口封装；数值初始化、类型转换、packing 和
+实际布局转换需自行实现。标准标量数学函数、指令 intrinsics、OpenMP 和 CUDA
+运行时接口可在目标配置内使用。该限制只约束生成候选，PyTorch baseline 保持
+参考实现，不受此限制。
+
+修改后启动新实验即可生效，实际规则记录于 `v*/generation_instructions.txt`
+和 `role_instructions.json`。这是提示词约束，尚无自动合规检测；正确性通过不等于
+证明候选独立实现，旧实验产物也不会因此被追溯检查。
+
 ## CPU OpenMP 与公平线程配置
 
 ### CPU 硬件上下文
