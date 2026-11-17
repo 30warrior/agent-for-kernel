@@ -24,11 +24,12 @@ class ExtensionHandle:
 
 
 class Backend:
-    def __init__(self, target, compile_timeout=300):
+    def __init__(self, target, compile_timeout=300, threads=1):
         if target not in ("cuda", "neon", "sve"):
             raise ValueError("Unknown target: " + target)
         self.target = target
         self.compile_timeout = compile_timeout
+        self.threads = threads
 
     def capabilities(self):
         import torch
@@ -49,6 +50,7 @@ class Backend:
             if required not in features:
                 raise RuntimeError("Host does not report " + required)
             info["features"] = features
+            info["openmp_enabled"] = self.threads > 1
             vector = Path("/proc/sys/abi/sve_default_vector_length")
             if vector.exists():
                 info["sve_default_vector_bytes"] = int(vector.read_text())
@@ -58,6 +60,7 @@ class Backend:
         except (OSError, subprocess.TimeoutExpired) as error:
             raise RuntimeError("Compiler unavailable: " + str(error)) from error
         info["cflags"] = self.cflags()
+        info["ldflags"] = self.ldflags()
         return info
 
     def cflags(self):
@@ -66,7 +69,12 @@ class Backend:
             flags += ["-march=armv8-a+simd"]
         elif self.target == "sve":
             flags += ["-march=armv8.2-a+sve", "-msve-vector-bits=scalable"]
+        if self.target != "cuda" and self.threads > 1:
+            flags.append("-fopenmp")
         return flags
+
+    def ldflags(self):
+        return ["-fopenmp"] if self.target != "cuda" and self.threads > 1 else []
 
     def compile(self, source, folder):
         folder = Path(folder).resolve()
@@ -79,7 +87,7 @@ class Backend:
         build = folder / "build"
         build.mkdir(exist_ok=True)
         request = dict(name=name, source=str(source), build_dir=str(build),
-                       target=self.target, cflags=self.cflags(), hardware=info)
+                       target=self.target, cflags=self.cflags(), ldflags=self.ldflags(), hardware=info)
         request_path = folder / "build_request.json"
         request_path.write_text(json.dumps(request, indent=2))
         project = Path(__file__).resolve().parent.parent
@@ -119,6 +127,9 @@ class Backend:
             return "ERROR: " + str(error)
 
     def load_candidate(self, artifact, wrapper_path, reference):
+        if self.target != "cuda":
+            from .cpu_execution import restore_cpu_affinity
+            restore_cpu_affinity()
         name = artifact["name"]
         extension = sys.modules.get(name)
         if extension is None:

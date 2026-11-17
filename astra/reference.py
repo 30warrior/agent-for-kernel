@@ -56,13 +56,17 @@ class Reference:
     metadata: dict
 
 
-def prepare_reference(task, target, seed=42, threads=1):
+def prepare_reference(task, target, seed=42, threads=1, cpu_execution=None):
     if threads < 1:
         raise ValueError("threads must be positive")
     if target == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA target requires an available CUDA device")
     device = torch.device("cuda" if target == "cuda" else "cpu")
-    torch.set_num_threads(threads)
+    from .cpu_execution import configure_torch_threads, runtime_snapshot
+    if target == "cuda":
+        torch.set_num_threads(threads)
+    else:
+        configure_torch_threads(torch, threads)
     random.seed(seed)
     torch.manual_seed(seed)
     # Prevent implicit allocations from selecting an NPU/GPU on CPU runs.
@@ -96,6 +100,9 @@ def prepare_reference(task, target, seed=42, threads=1):
                     affinity=sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
                     init_inputs=describe(init), cases=[describe(case) for case in cases],
                     outputs=[describe(output) for output in expected])
+    if cpu_execution is not None:
+        metadata["affinity"] = list(cpu_execution["affinity"])
+        metadata["cpu_execution"] = runtime_snapshot(torch, cpu_execution)
     return Reference(model, cases, expected, mutated, metadata)
 
 

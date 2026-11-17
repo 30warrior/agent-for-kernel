@@ -20,7 +20,14 @@ def execute(run_dir, candidate_dir, mode, settings):
     env = os.environ.copy()
     env["PYTHONPATH"] = str(project) + os.pathsep + env.get("PYTHONPATH", "")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env["OMP_NUM_THREADS"] = env["MKL_NUM_THREADS"] = "1"
+    metadata = json.loads((run_dir / "reference.json").read_text())
+    if metadata["target"] != "cuda":
+        from .cpu_execution import apply_cpu_execution
+        configuration = metadata.get("cpu_execution")
+        if configuration:
+            apply_cpu_execution(configuration, environment=env)
+        else:
+            env["OMP_NUM_THREADS"] = env["MKL_NUM_THREADS"] = str(metadata.get("threads", 1))
     process = subprocess.Popen([sys.executable, "-B", "-m", "astra.eval_worker", str(request_path)],
                                cwd=project, env=env, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, start_new_session=True)

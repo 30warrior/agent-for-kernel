@@ -7,6 +7,7 @@ Suggestions:
 - Hoist Invariant Broadcasts, Shape and Address Calculations; Minimize Lane Extraction and Shuffles
 - Handle NEON Tails Safely and Use SVE Predication for Partial Vectors
 - Consider Prefetching for Large Workloads; Include Packing and Layout Conversion Costs within the Model Boundary
+- When Multiple Threads Are Configured, Parallelize Independent Outer Work with OpenMP and Use NEON/SVE within Each Thread; Avoid Parallel Overhead on Small Inputs
 
 Focus:
 - Allow NEON and SVE in the same implementation; mixing is optional and must justify its overhead. A NEON-only or SVE-only implementation is also valid.
@@ -15,5 +16,5 @@ Focus:
 - Preserve inactive SVE accumulator lanes when needed, and include all valid partial sums in the final reduction; never consume unspecified inactive values.
 - Choose vectorization axes from actual strides; avoid unnecessary gathers, scalar work per lane, spills, and excessive unrolling.
 - Preserve numerical accuracy and memory safety; use FMA or approximate math only within the required tolerance.
-- Remain single-threaded; do not use OpenMP or external threaded libraries.
+- Follow the configured thread budget and CPU affinity. OpenMP is allowed only when multiple threads are configured; do not change thread limits or binding, use nested parallel regions, or call external numerical libraries.
 - Evaluate every fixed case. Shape/stride-based specialization is allowed; recognizing particular input values or hard-coding outputs is not.

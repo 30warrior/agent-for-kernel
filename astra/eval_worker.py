@@ -6,6 +6,10 @@ import sys
 
 def main():
     request = json.loads(Path(sys.argv[1]).read_text())
+    saved = json.loads((Path(request["run_dir"]) / "reference.json").read_text())
+    if saved.get("cpu_execution"):
+        from .cpu_execution import apply_cpu_execution
+        apply_cpu_execution(saved["cpu_execution"])
     from .reference import restore_reference
     from .backends import Backend
     from .evaluation import verify, benchmark
@@ -25,7 +29,7 @@ def main():
     meta = reference.metadata
     folder = Path(request["candidate_dir"])
     artifact = json.loads((folder / "build.json").read_text())
-    candidate = Backend(meta["target"]).load_candidate(artifact, folder / "model.py", reference.model)
+    candidate = Backend(meta["target"], threads=meta.get("threads", 1)).load_candidate(artifact, folder / "model.py", reference.model)
     result = verify(reference, candidate, meta["target"], request["rtol"], request["atol"])
     if request["mode"] == "benchmark":
         result = benchmark(reference, candidate, meta["target"], result, request["warmup"], request["trials"])
@@ -41,6 +45,10 @@ def main():
                 record["benchmark"] = timing
                 record["reference_speedup"] = ref_timing["median_ms"] / timing["median_ms"]
             result.update(complete=True, status="passed")
+    if meta.get("cpu_execution"):
+        import torch
+        from .cpu_execution import runtime_snapshot
+        result["cpu_execution"] = runtime_snapshot(torch, meta["cpu_execution"])
     Path(request["result_path"]).write_text(json.dumps(result, indent=2))
 
 

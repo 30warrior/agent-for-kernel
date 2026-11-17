@@ -21,5 +21,9 @@ Shared testing/profiling/orchestrator role contracts also live in
 inputs, correctness tolerances, compiler flags or the measurement boundary.
 
 Each run saves actual role instructions and generation instructions for review.
+CPU threading instructions are added from the run configuration: `--threads 1`
+requires serial kernels, while `--threads N` (N > 1) enables OpenMP with the same
+thread budget and CPU allocation as the PyTorch baseline. Do not hard-code a
+single-thread requirement in the editable CPU Markdown files.
 No RAG retrieval is implemented yet; this file selection supplies the initial
 hardware-specific context and can be extended by a later retrieval stage.

@@ -15,7 +15,7 @@ def build_parser():
     parser.add_argument("--target", choices=("cuda", "neon", "sve"), default="neon")
     parser.add_argument("--list-tasks", action="store_true", help="List definitions without importing tasks or running kernels")
     parser.add_argument("--prepare-only", action="store_true", help="Prepare and benchmark the PyTorch reference; no LLM calls")
-    parser.add_argument("--threads", type=int, choices=(1,), default=1, help="Initial CPU backend is single-threaded")
+    parser.add_argument("--threads", type=int, default=1, help="CPU thread budget shared by PyTorch and OpenMP kernels (default: 1)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--trials", type=int, default=30)
@@ -32,7 +32,9 @@ def build_parser():
     parser.add_argument("--evaluate-only", metavar="CANDIDATE_DIR", help="Compile and evaluate saved kernel/model.py sources without LLM requests")
     parser.add_argument("--rtol", type=float)
     parser.add_argument("--atol", type=float)
-    parser.add_argument("--cpu-core", type=int, help="CPU affinity; defaults to the first allowed core for CPU targets")
+    affinity = parser.add_mutually_exclusive_group()
+    affinity.add_argument("--cpu-core", type=int, help="Anchor CPU for automatic physical-core selection in one NUMA node")
+    affinity.add_argument("--cpu-cores", help="Explicit logical CPU IDs/ranges, exactly --threads CPUs, e.g. 0,2,4,6")
     parser.add_argument("--max-iterations", type=int, default=3, help="Refinement rounds after v1; zero generates and evaluates v1 only")
     parser.add_argument("--selection-metric", choices=("geometric", "arithmetic"), default="geometric",
                         help="Mean per-case speedup on frozen generated tests used to select the best version")
@@ -49,6 +51,8 @@ def build_parser():
 
 def execute_task(args, parser):
     import math
+    if args.threads < 1:
+        parser.error("--threads must be positive")
     if args.extra_test_cases < 2 or not math.isfinite(args.test_suite_max_mib) or args.test_suite_max_mib <= 0:
         parser.error("extra-test-cases must be at least two and test-suite-max-mib must be positive and finite")
     if args.max_iterations < 0 or args.trials < 1 or args.warmup < 0:
@@ -72,19 +76,24 @@ def execute_task(args, parser):
         parser.error("prepare-only, generate-only and evaluate-only are mutually exclusive")
     if not args.prepare_only and not args.evaluate_only and not args.api_key:
         parser.error("Set OPENAI_API_KEY or pass --api-key before model generation")
-    if args.target != "cuda" and hasattr(os, "sched_getaffinity"):
-        allowed = os.sched_getaffinity(0)
-        core = args.cpu_core if args.cpu_core is not None else min(allowed)
-        if core not in allowed:
-            parser.error("--cpu-core is outside this process's allowed affinity")
-        os.sched_setaffinity(0, {core})
+    cpu_execution = None
+    if args.target != "cuda":
+        from astra.cpu_execution import select_cpu_execution, apply_cpu_execution
+        try:
+            cpu_execution = select_cpu_execution(args.threads, args.cpu_core, args.cpu_cores)
+            apply_cpu_execution(cpu_execution)
+        except (ValueError, OSError) as error:
+            parser.error(str(error))
+        print("CPU execution:", json.dumps(cpu_execution), flush=True)
+    elif args.cpu_core is not None or args.cpu_cores is not None or args.threads != 1:
+        parser.error("--threads > 1 and CPU affinity options apply only to CPU targets")
     from astra.reference import prepare_reference, save_reference
     from astra.backends import Backend
     from astra.timing import measure
     task = load_task(args.dataset, args.dataset_root, args.task)
-    backend = Backend(args.target, args.compile_timeout)
+    backend = Backend(args.target, args.compile_timeout, threads=args.threads)
     hardware = backend.capabilities()
-    reference = prepare_reference(task, args.target, args.seed, args.threads)
+    reference = prepare_reference(task, args.target, args.seed, args.threads, cpu_execution=cpu_execution)
     reference.metadata["hardware"] = hardware
     folder = Path(__file__).resolve().parent / "optimization_runs" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     save_reference(reference, folder)

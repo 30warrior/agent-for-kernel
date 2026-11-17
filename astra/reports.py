@@ -49,6 +49,7 @@ def summarize(payload):
         first_score = (v1.get("selection_speedups") or {}).get(metric)
         best_score = (best.get("selection_speedups") or {}).get(metric)
         return dict(task=payload["task"], target=payload["target"], best_version=payload["best_version"],
+            cpu_execution=payload.get("cpu_execution"),
             success=valid, test_suite=payload.get("test_suite"), selection=payload["selection"],
             final_evaluation_status=final.get("status", "pending"), reference_speedup_metric=metric,
             compiled=any(version.get("compiled") for version in versions),

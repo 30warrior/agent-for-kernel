@@ -63,13 +63,29 @@ def optimization_guidance(target):
     return (Path(__file__).resolve().parent.parent / "prompts" / ("cpu_" + target + ".md")).read_text(encoding="utf-8")
 
 
-def strategy_instructions(target):
+def threading_guidance(target, metadata=None):
+    if target == "cuda":
+        return ""
+    threads = (metadata or {}).get("threads", 1)
+    if threads == 1:
+        return "\nCPU execution: exactly one thread. Do not use OpenMP, worker pools or external threaded libraries.\n"
+    return (f"\nCPU execution: at most {threads} threads, on the supplied fixed CPU affinity. "
+            f"The PyTorch baseline also uses {threads} intra-op threads and one inter-op thread. "
+            "OpenMP is enabled by the framework's compiler and linker flags; <omp.h> and #pragma omp are allowed. "
+            "Use OpenMP for sufficiently large independent outer loops and NEON/SVE within each thread. "
+            "Prefer static scheduling for regular work, avoid false sharing, and use size thresholds to avoid "
+            "parallel startup costs on small inputs. Preserve the runtime thread/affinity settings: do not "
+            "increase thread counts, spawn separate pools, enable nested parallelism or change CPU binding. "
+            "Serial paths for small cases are allowed. Do not call external numerical libraries.\n")
+
+
+def strategy_instructions(target, metadata=None):
     if target == "cuda":
         instructions = CUDA_STRATEGY
     else:
         instructions = ("You are an expert Arm CPU kernel optimization strategist. Give concrete, implementable suggestions only (no code).\n"
                         + TARGET_GUIDANCE[target] + optimization_guidance(target))
-    return instructions + "\nPreserve the task semantics and public interface. Respect dtype, accuracy and the configured execution model. Analyze actual compiler errors, numerical failures and per-case timings. Distinguish measured facts from hypotheses. Never invent measurements."
+    return instructions + threading_guidance(target, metadata) + "\nPreserve the task semantics and public interface. Respect dtype, accuracy and the configured execution model. Analyze actual compiler errors, numerical failures and per-case timings. Distinguish measured facts from hypotheses. Never invent measurements."
 
 
 def public_metadata(value):

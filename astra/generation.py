@@ -3,7 +3,7 @@ import ast
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from .prompts import TARGET_GUIDANCE, optimization_guidance, public_metadata
+from .prompts import TARGET_GUIDANCE, optimization_guidance, public_metadata, threading_guidance
 
 
 @dataclass
@@ -50,7 +50,7 @@ manage arguments, allocate outputs and expose state, but must not call the refer
 forward, PyTorch numerical operators or hidden baseline libraries to compute results.
 Implement the complete task, including broadcasting, strides and required input
 mutations. Never special-case test values or hard-code outputs. Use supported ISA
-only. Single-threaded means no OpenMP, worker pools or external threaded libraries.
+only. Respect the supplied CPU thread budget and affinity configuration.
 Do not relax math accuracy or dtype without satisfying the task tolerances.
 """
 
@@ -86,7 +86,7 @@ def generate_candidate(task, reference_metadata, target, folder, config, previou
                 return "ERROR: save both sources first"
             return compiler(kernel_path, folder)
         tools.append(compile_candidate)
-    instructions = TARGET_GUIDANCE[target] + optimization_guidance(target) + CONTRACT + (
+    instructions = TARGET_GUIDANCE[target] + optimization_guidance(target) + threading_guidance(target, reference_metadata) + CONTRACT + (
         " After saving, compile with compile_candidate if available and repair compiler errors."
         " Preserve the previous native function signatures when refining. Output complete sources through the tools.")
     agent = Agent(name="CodeGenerator", model=config.model, instructions=instructions, tools=tools)

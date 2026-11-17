@@ -97,6 +97,54 @@ coding 和 planning agent。修改后启动新运行。CUDA 优化建议保留 A
 Orchestrator 负责接收进度通知，Python 驱动测试、profiling、planning、coding 循环。
 RAG 尚未实现。
 
+## CPU OpenMP 与公平线程配置
+
+`--threads` 默认仍为 1；设为 N（N > 1）时，CPU 编译和链接均启用 `-fopenmp`，
+Coding/Planning Agent 获得对应线程预算，允许生成 OpenMP + NEON/SVE 实现。
+小输入可走串行路径，设置多线程不代表所有输入都必须启动并行区域。
+CUDA 的编译和执行方式保持原有配置。
+
+```bash
+bash run_server.sh --dataset akg --dataset-root benchmarks/akg \
+  --task static_shape/elemwise/elemwise_add_001.py --target sve \
+  --threads 4 --model-api responses --max-iterations 1
+```
+
+默认从进程原有允许的 CPU 中，选择同一 NUMA 节点内的 N 个不同物理核心，
+避免自动把 SMT 兄弟线程算作不同物理核心。核心不足会明确报错。
+`--cpu-core ID` 可选择自动分配的起点；也可显式指定恰好 N 个逻辑 CPU：
+
+```bash
+# CPU ID 应按实际服务器拓扑选择，此处仅为示例。
+bash run_server.sh --dataset akg --dataset-root benchmarks/akg \
+  --task static_shape/elemwise/elemwise_add_001.py --target sve \
+  --threads 4 --cpu-cores 0,2,4,6 --prepare-only
+```
+
+显式列表也支持 `0-3`，但不会自动排除 SMT 或跨 NUMA；实际拓扑写入报告。
+该功能设置线程和 CPU 亲和性，不负责 NUMA 内存绑定、独占核心或隔离其他用户负载。
+
+配置在导入 PyTorch 前应用，并由所有评测子进程重放：PyTorch intra-op=N、
+inter-op=1，OpenMP 线程上限=N、禁止动态团队和嵌套并行，MKL/OpenBLAS/BLIS
+使用相同线程预算；OpenMP places 固定为选中的 CPU。已有运行目录保留自己的配置，
+不会因为新的命令行参数改变原实验的线程数。
+
+`reference.json`、`progress.json`、`summary.json` 和各评测结果中的
+`cpu_execution` 记录分配的 CPU、NUMA/物理核心拓扑、运行时线程配置和 PyTorch
+实际线程设置。`main_thread_affinity` 是主线程当时的绑定，可能因 OpenMP 绑定而只含
+一个 CPU；完整资源预算看 `affinity`。配置线程数是上限，不等于每个 kernel 实际
+启动的 OpenMP 团队大小，也不代表已实现多线程加速。
+
+加载原生扩展前会恢复完整 CPU 集合，避免 PyTorch 的 OpenMP 主线程先绑定到
+一个核心后，另一个 OpenMP 运行库仅识别该核心。2026-11-17 在服务器上通过框架的
+编译及加载路径核查：OpenMP 团队大小为 4，线程分别运行在 CPU 0、2、4、6；
+PyTorch intra-op=4、inter-op=1。NEON 单线程参考准备也通过。
+
+另外使用真实 LLM 生成 SVE + OpenMP 广播乘法，v1、v2 均通过同一组 9 个固定样例
+的正确性和性能检查，并完成原始样例最终复测。运行目录为
+`optimization_runs/20261117_173142_796563/`，选中 v2。该次 10 次短采样参考中位延迟
+2.8210 ms、候选 2.7870 ms，仅用于验证执行链路，不能证明稳定性能提升。
+
 结果保存在 `optimization_runs/<运行时间>/`，重点查看 `summary.json`、
 `benchmark_details.csv`、`v1/kernel.cpp` 和后续版本；提示词和策略建议也在运行目录。
 `--prepare-only` 不调用模型，只检查原始参考样例；`--evaluate-only` 可复测本地保存

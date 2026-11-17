@@ -53,7 +53,7 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
         suite_builder=None):
     from agents import Agent, Runner, function_tool
     folder = Path(folder)
-    backend = backend or Backend(settings.target, settings.compile_timeout)
+    backend = backend or Backend(settings.target, settings.compile_timeout, threads=settings.threads)
     executor = executor or execute
     records, best, best_score, first_valid_score = [], None, None, None
     selection_metric = getattr(settings, "selection_metric", "geometric")
@@ -97,8 +97,8 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
     context["selection"] = dict(metric=selection_metric, origin="generated", higher_is_better=True,
         instruction="Select by mean speedup on frozen generated cases. Final original-case evaluation occurs once after all iterations; do not optimize by original-case rankings.")
     (folder / "role_instructions.json").write_text(json.dumps(dict(orchestrator=ORCHESTRATOR,
-        testing=TESTER, profiling=PROFILER, planning=strategy_instructions(settings.target)), indent=2), encoding="utf-8")
-    strategist = Agent(name="PlanningAgent", model=llm.model, instructions=strategy_instructions(settings.target))
+        testing=TESTER, profiling=PROFILER, planning=strategy_instructions(settings.target, reference.metadata)), indent=2), encoding="utf-8")
+    strategist = Agent(name="PlanningAgent", model=llm.model, instructions=strategy_instructions(settings.target, reference.metadata))
     previous, feedback = None, None
     for index in range(1, settings.max_iterations + 2):
         version = f"v{index}"
@@ -172,6 +172,7 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
                        selection=dict(metric=selection_metric, origin="generated", higher_is_better=True,
                                       best_score=best_score, final_evaluation_pending=True),
                        test_suite={key: reference.metadata[key] for key in ("suite_id", "case_labels", "dataset_case_count")},
+                       cpu_execution=reference.metadata.get("cpu_execution"),
                        versions=records, best_version=best, first_candidate_score=first_valid_score,
                        configuration={key:value for key,value in vars(settings).items() if key not in ("api_key", "result_file")})
         temporary = folder / ".progress.tmp"
