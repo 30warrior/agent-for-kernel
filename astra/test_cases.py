@@ -28,14 +28,14 @@ coverage must declare EVERY axis listed in coverage_requirements.axes, using the
 {"base_case":0,"input":0,"axis":1,"kind":"variable","reason":"Source reduces this resizable dimension"}.
 For a dimension fixed by weights/constructor/semantics use kind:"fixed" with a specific source-based reason.
 Follow coverage_requirements.profile. In compact mode, cover each supplied boundary length across
-the legal layouts JOINTLY, not a length-by-layout Cartesian product. Additionally, cover layout_lengths
-(the multi-vector remainder) in EVERY listed legal layout: contiguous, unit_stride (stride[axis]==1),
-and strided (stride[axis]>1). Full mode requires every boundary length in every listed layout.
+the legal layouts JOINTLY, not a length-by-layout Cartesian product. Include the multi-vector
+remainder in that union and include every legal layout at least once: contiguous, unit_stride
+(stride[axis]==1), and strided (stride[axis]>1). Full mode requires every boundary length in every layout.
 For a middle reduction axis, transpose to make that
 axis unit-stride, not just an unrelated axis. Use small other dimensions and preserve coupled dimensions.
 Strided coverage at length 1 is not required: singleton axes have no stride-dependent traversal.
 One case may cover multiple axes/layouts. Reuse cases across inputs/axes and combine value variation
-with shape/layout checks. Obey the case cap: compact mode defaults to exactly eight additional cases.
+with shape/layout checks. Obey the case cap: compact mode defaults to exactly fifteen additional cases.
 Where the budget permits, reserve one case with original input shapes and varied nonzero values
 so generated-case performance selection also samples the original workload scale.
 Nonzero-capable distributions must supply boundary coverage; zero-only cases do not count.
@@ -51,7 +51,7 @@ This samples vector and common unroll boundaries; it does not prove arbitrary ca
 """
 
 
-def validate_spec(spec, count, maximum=8):
+def validate_spec(spec, count, maximum=15):
     if not isinstance(spec, dict) or set(spec) != {"cases", "coverage"}:
         raise ValueError("Test specification must contain cases and coverage lists; legacy specs need a coverage declaration")
     cases = spec["cases"]
@@ -85,7 +85,7 @@ def validate_spec(spec, count, maximum=8):
 def suite_limits(settings):
     maximum = getattr(settings, 'max_extra_test_cases', None)
     if maximum is None:
-        maximum = 128 if getattr(settings, 'test_coverage', 'compact') == 'full' else max(8, settings.extra_test_cases)
+        maximum = 128 if getattr(settings, 'test_coverage', 'compact') == 'full' else max(15, settings.extra_test_cases)
     return settings.extra_test_cases, maximum
 
 

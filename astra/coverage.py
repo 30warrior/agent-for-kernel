@@ -113,9 +113,14 @@ def check_coverage(spec, cases, metadata, profile='compact'):
             if not layout_lengths:
                 layout_lengths = [lengths[-1]]
         required = {layout: [n for n in layout_lengths if layout != 'strided' or n > 1] for layout in layouts}
+        if profile == 'compact':
+            # Compact mode avoids the Cartesian product: each legal layout must
+            # appear, while all boundary lengths are checked across their union.
+            required = {layout: [] for layout in layouts}
         gaps = {layout: sorted(set(required[layout]) - observed[layout]) for layout in layouts
                 if set(required[layout]) - observed[layout]}
         if profile == 'compact':
+            gaps.update({layout: ['any_length'] for layout in layouts if not observed[layout]})
             covered = set().union(*observed.values())
             if set(lengths) - covered:
                 gaps['any_layout'] = sorted(set(lengths) - covered)

@@ -108,10 +108,11 @@ CPU and CUDA numbers are not directly compared to one another.
 ## Shared refinement workflow
 
 Without an *-only switch, TestingAgent generates and freezes extra cases once.
-The default compact suite contains exactly eight extra cases plus every original
-dataset case (nine total for a task with one original case). Boundary sizes share
+The default compact suite contains exactly fifteen extra cases plus every original
+dataset case (16 total for a task with one original case). Boundary sizes share
 layout coverage instead of testing every size/layout combination. The multi-vector
-remainder is still required in every legal layout, with axis-level checks retained.
+remainder is required in the union of layouts, and each legal layout must appear at
+least once for every variable axis.
 This reduces sampling coverage; use `--test-coverage full` to restore the full
 boundary/layout grid and an automatic cap of 128 extras. Set `--extra-test-cases`
 and `--max-extra-test-cases` to change the minimum/cap explicitly. An insufficient

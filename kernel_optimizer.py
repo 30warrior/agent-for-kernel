@@ -44,10 +44,10 @@ def build_parser():
     parser.add_argument("--perf-repeats", type=int, default=64)
     parser.add_argument("--perf-batch-mib", type=float, default=64,
                         help="Approximate prepared input/state/output memory budget for perf batches")
-    parser.add_argument("--extra-test-cases", type=int, default=8,
-                        help="Minimum additional cases (default: 8; compact mode uses exactly 8 by default)")
+    parser.add_argument("--extra-test-cases", type=int, default=15,
+                        help="Minimum additional cases (default: 15; compact mode uses exactly 15 by default)")
     parser.add_argument("--max-extra-test-cases", type=int,
-                        help="Additional-case cap (default: max(8, minimum) in compact mode; 128 in full mode)")
+                        help="Additional-case cap (default: max(15, minimum) in compact mode; 128 in full mode)")
     parser.add_argument('--test-coverage', choices=('compact', 'full'), default='compact',
                         help='Compact boundary/layout coverage by default; full tests every boundary in every layout')
     parser.add_argument("--test-suite-max-mib", type=float, default=512,
@@ -67,7 +67,7 @@ def execute_task(args, parser):
     if args.extra_test_cases < 2 or not math.isfinite(args.test_suite_max_mib) or args.test_suite_max_mib <= 0:
         parser.error("extra-test-cases must be at least two and test-suite-max-mib must be positive and finite")
     if args.max_extra_test_cases is None:
-        args.max_extra_test_cases = 128 if args.test_coverage == 'full' else max(8, args.extra_test_cases)
+        args.max_extra_test_cases = 128 if args.test_coverage == 'full' else max(15, args.extra_test_cases)
     if args.max_extra_test_cases < args.extra_test_cases:
         parser.error('max-extra-test-cases must be at least extra-test-cases')
     if args.max_iterations < 0 or args.trials < 1 or args.warmup < 0:
