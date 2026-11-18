@@ -7,7 +7,7 @@ from pathlib import Path
 import random
 
 
-SPEC_GUIDE = """Submit JSON with a cases list through generate_comprehensive_test_cases(test_spec).
+SPEC_GUIDE = """Submit JSON with cases and coverage lists through generate_comprehensive_test_cases(test_spec).
 Each case: {"name":"unique name", "base_case":0, "seed":43, "inputs":[...]}.
 base_case indexes the ORIGINAL dataset cases. inputs describes ALL positional arguments.
 Tensor descriptor: {"kind":"tensor", "shape":[2,33], "distribution":"normal", "mean":0.0, "std":1.0}.
@@ -23,15 +23,36 @@ Cover mixed signs and tails only where the reference contract permits them. Do n
 All proposed cases must run successfully on the reference model before freezing. Invalid cases return errors for repair.
 The suite is generated ONCE before candidate evaluation; never add/remove cases in response to candidate failures.
 Only propose additional input tensors within the supplied total byte budget; the original dataset is retained unchanged.
+The case count must be between minimum_additional_cases and maximum_additional_cases, inclusive.
+coverage must declare EVERY axis listed in coverage_requirements.axes, using the input's FINAL axes AFTER transpose:
+{"base_case":0,"input":0,"axis":1,"kind":"variable","reason":"Source reduces this resizable dimension"}.
+For a dimension fixed by weights/constructor/semantics use kind:"fixed" with a specific source-based reason.
+Variable dimensions must cover each supplied boundary length in contiguous, unit_stride (stride[axis]==1),
+and strided (stride[axis]>1) layouts where listed. For a middle reduction axis, transpose to make that
+axis unit-stride, not just an unrelated axis. Use small other dimensions and preserve coupled dimensions.
+Strided coverage at length 1 is not required: singleton axes have no stride-dependent traversal.
+One case may cover multiple axes/layouts; use enough cases within the supplied maximum, not just eight.
+Nonzero-capable distributions must supply boundary coverage; zero-only cases do not count.
+Include ones to expose missing terms, and mixed-sign inputs where legal to check accuracy.
+Only when required by the REFERENCE contract, a variable entry may supply minimum/maximum/multiple
+(positive integers), or layout_exemptions:{"strided":"Source requires contiguous ..."}; explain these
+restrictions in reason. A layout structurally impossible with the input descriptor and fixed dimensions
+may also be exempted with that specific reason. Never exempt a representable legal layout or mark
+resizable axes fixed to avoid testing.
+When no SVE VL is readable, supplied generic sizes are diagnostic coverage, not an assumed hardware VL.
+The tool checks actual shapes and strides and returns missing coverage for you to repair BEFORE freezing.
+This samples vector and common unroll boundaries; it does not prove arbitrary candidate tile/loop coverage.
 """
 
 
-def validate_spec(spec, count):
-    if not isinstance(spec, dict) or set(spec) != {"cases"}:
-        raise ValueError("Test specification must contain only a cases list")
+def validate_spec(spec, count, maximum=128):
+    if not isinstance(spec, dict) or set(spec) != {"cases", "coverage"}:
+        raise ValueError("Test specification must contain cases and coverage lists; legacy specs need a coverage declaration")
     cases = spec["cases"]
-    if not isinstance(cases, list) or len(cases) != count:
-        raise ValueError(f"Expected exactly {count} additional test cases")
+    if not isinstance(cases, list) or not count <= len(cases) <= maximum:
+        raise ValueError(f"Expected {count} to {maximum} additional test cases")
+    if not isinstance(spec['coverage'], list):
+        raise ValueError('coverage must be a list of axis declarations')
     names, signatures = set(), set()
     for case in cases:
         if not isinstance(case, dict) or set(case) - {"name", "base_case", "seed", "inputs"}:
@@ -120,7 +141,7 @@ def freeze_suite(reference, spec, folder, settings):
     from .reference import Reference, clone_inputs, describe, map_tree, save_reference
     from .timing import measure
     from .reports import atomic_write
-    spec = validate_spec(spec, settings.extra_test_cases)
+    spec = validate_spec(spec, settings.extra_test_cases, getattr(settings, 'max_extra_test_cases', 128))
     folder = Path(folder)
     frozen = folder / "test_suite.json"
     if frozen.exists():
@@ -156,7 +177,10 @@ def freeze_suite(reference, spec, folder, settings):
             labels.append(dict(name=case["name"], origin="generated", seed=case["seed"]))
         except Exception as error:
             raise ValueError(f"Generated case {index} ({case['name']}) failed reference validation: {error}") from error
+    from .coverage import check_coverage
+    coverage = check_coverage(spec, cases, reference.metadata)
     metadata = copy.deepcopy(reference.metadata)
+    metadata['boundary_coverage'] = coverage
     identity = dict(spec=spec, source_sha256=metadata["source_sha256"], seed=metadata["seed"])
     metadata["suite_id"] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     metadata["dataset_case_count"] = original_count
@@ -170,7 +194,8 @@ def freeze_suite(reference, spec, folder, settings):
     save_reference(combined, folder)
     atomic_write(folder / "baseline.json", json.dumps(baseline, indent=2))
     atomic_write(frozen, json.dumps(dict(spec=spec, suite_id=metadata["suite_id"],
-        dataset_case_count=original_count, cases=metadata["case_labels"]), indent=2))
+        dataset_case_count=original_count, cases=metadata["case_labels"], boundary_coverage=coverage), indent=2))
+    atomic_write(folder / 'coverage.json', json.dumps(coverage, indent=2))
     # Update the caller only once all reference execution and timing have succeeded.
     reference.cases, reference.expected = combined.cases, combined.expected
     reference.mutated_inputs, reference.metadata = combined.mutated_inputs, combined.metadata
@@ -191,7 +216,7 @@ def generate_suite(task, reference, folder, settings, llm, materialize):
         if outcome:
             return "Suite already frozen; reuse it unchanged for every version."
         try:
-            spec = validate_spec(json.loads(test_spec), settings.extra_test_cases)
+            spec = validate_spec(json.loads(test_spec), settings.extra_test_cases, getattr(settings, 'max_extra_test_cases', 128))
             result = materialize(spec)
             outcome.update(result)
             return json.dumps(dict(status="frozen", case_count=len(result["reference"]["cases"]),
@@ -199,10 +224,13 @@ def generate_suite(task, reference, folder, settings, llm, materialize):
         except Exception as error:
             return "ERROR: " + str(error)
 
+    from .coverage import coverage_requirements
     instructions = TESTER + "\n" + SPEC_GUIDE
     prompt = dict(action="generate_and_freeze_test_suite", task=public_metadata(task.metadata()),
                   reference_source=task.source, execution=execution_context(reference.metadata, settings),
-                  required_additional_cases=settings.extra_test_cases,
+                  minimum_additional_cases=settings.extra_test_cases,
+                  maximum_additional_cases=getattr(settings, 'max_extra_test_cases', 128),
+                  coverage_requirements=coverage_requirements(reference.metadata),
                   total_additional_input_bytes_limit=int(settings.test_suite_max_mib * 2**20))
     (folder / "test_generation_prompt.json").write_text(json.dumps(prompt, indent=2), encoding="utf-8")
     (folder / "test_generation_instructions.txt").write_text(instructions, encoding="utf-8")

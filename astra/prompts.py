@@ -61,6 +61,27 @@ Independent-kernel experiment constraints (apply to every candidate and refineme
   their replacement with generated native code rather than retaining that path.
 """
 
+BOUNDARY_CORRECTNESS = """
+Boundary and layout correctness requirements for every generated/refined kernel:
+- Account for every logical element exactly once on every shape/stride dispatch path,
+  including scalar, contiguous, noncontiguous, packed, SIMD, threaded and CUDA paths.
+- After a loop unrolled by U vectors, the remainder can be almost U full vectors.
+  Do not assume a single masked vector completes the remainder. Use a complete
+  vector cleanup loop and a final predicate/scalar cleanup as appropriate.
+- For reductions, preserve partial sums in inactive lanes and include every valid
+  contribution exactly once; initialize accumulators and never read unwritten output.
+  For GEMM, handle M/N/K tile remainders independently. Mask all tail loads/stores.
+- When changing vector width, unroll factor, tile size, packing or dispatch thresholds,
+  reason explicitly about lengths below/equal/above the boundary and all affected strides.
+  Use runtime SVE lane counts; observed VL is for tests, not a hard-coded kernel assumption.
+- Planning must audit each proposed transformation and previous source's loop bounds,
+  index updates, remainder loops and layout branches before proposing performance changes.
+  Fixed-suite success is evidence only for those inputs, not proof of all paths.
+  Report suspected coverage gaps with exact shapes/strides and an explanation. Do not
+  change the frozen suite or invent test outcomes; new gaps require a separate diagnostic
+  or a subsequent experiment with a new suite replayed consistently across versions.
+"""
+
 TARGET_GUIDANCE = {
     "cuda": "Generate CUDA C++ (.cu) with at least one __global__ compute kernel. Launch on PyTorch's current CUDA stream; check shapes/dtypes and handle tails.\n",
     "neon": "Generate AArch64 C++ using <arm_neon.h> NEON intrinsics within the supplied compiler flags. Do not use SVE, SVE2 or SME even if the host supports them. Handle fixed-width vector tails and unaligned inputs safely.\n",
@@ -77,9 +98,16 @@ Generate the extra test suite ONCE, before candidate evaluation, and reuse it fo
 Keep every original dataset case. Never change model initialization, weights, task semantics or the frozen suite.
 When generating tests, call generate_comprehensive_test_cases with a complete JSON specification.
 Choose practical small/medium cases, mixed signs, zeros and ones, broadcasting/strides and vector tails where legal.
+Use the supplied boundary coverage requirements and declare every input axis variable or fixed from the reference source.
+Cover vector and common unroll boundaries in each legal stride category; a single odd length or a transpose
+of unrelated axes does not establish tail coverage. Include nonzero values to reveal omitted contributions.
 Respect the reference source: parameterized layers may constrain channels, normalized shapes, dtypes and label ranges.
 Use the reference model to validate cases through the tool; repair invalid specifications rather than discarding cases.
 During each version's evaluation, call verify_candidate. Do not invent results or generate new tests.
+Review candidate loop bounds, cleanup loops, inactive reduction lanes, M/N/K tile tails and shape/stride
+dispatch paths. Cross-check them against execution.boundary_coverage. Report uncovered branches and
+suspected counterexamples separately from actual pass/fail; tool success does not prove general correctness.
+Never mutate the frozen suite mid-run. Coverage gaps must be recorded for diagnostics or the next experiment.
 The same fixed inputs are sent to the profiling agent after correctness passes; failed candidates are never timed.
 """
 
@@ -120,6 +148,7 @@ def strategy_instructions(target, metadata=None):
     else:
         instructions = ("You are an expert Arm CPU kernel optimization strategist. Give concrete, implementable suggestions only (no code).\n"
                         + TARGET_GUIDANCE[target] + optimization_guidance(target))
+    instructions += BOUNDARY_CORRECTNESS
     return instructions + threading_guidance(target, metadata) + INDEPENDENT_KERNEL_POLICY + "\nPreserve the task semantics and public interface. Respect dtype, accuracy and the configured execution model. Analyze actual compiler errors, numerical failures and per-case timings. Distinguish measured facts from hypotheses. Never invent measurements."
 
 

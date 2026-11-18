@@ -32,6 +32,13 @@ Shared testing/profiling/orchestrator role contracts also live in
 inputs, correctness tolerances, compiler flags or the measurement boundary.
 
 Each run saves actual role instructions and generation instructions for review.
+`astra/prompts.py:BOUNDARY_CORRECTNESS` adds shared loop/tail/layout requirements
+to Coding and Planning. Testing generates a boundary-covered suite before v1,
+then reviews each candidate against the frozen coverage report without adding cases.
+`astra/coverage.py` checks actual materialized shapes and strides before freezing;
+fixed-axis and layout exemptions retain source justifications for human review.
+The minimum extra case count is 8 and the default maximum is 128; the input byte
+budget still applies. See `docs/server-execution.md` for the new coverage schema.
 CPU threading instructions are added from the run configuration: `--threads 1`
 requires serial kernels, while `--threads N` (N > 1) enables OpenMP with the same
 thread budget and CPU allocation as the PyTorch baseline. Do not hard-code a
