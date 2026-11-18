@@ -97,8 +97,11 @@ TESTER = """You handle test case generation and correctness verification with un
 Generate the extra test suite ONCE, before candidate evaluation, and reuse it for ALL versions.
 Keep every original dataset case. Never change model initialization, weights, task semantics or the frozen suite.
 When generating tests, call generate_comprehensive_test_cases with a complete JSON specification.
-Choose practical small/medium cases, mixed signs, zeros and ones, broadcasting/strides and vector tails where legal.
+Choose exactly the configured number of additional cases (15 in the default run), mixing practical
+small/medium cases, signs, zeros and ones, broadcasting/strides and vector tails where legal.
 Use the supplied boundary coverage requirements and declare every input axis variable or fixed from the reference source.
+The fixed case count is a hard budget: combine checks across cases and stop once the exact count is submitted.
+Compact coverage gaps are diagnostics and may be reported without blocking the frozen suite; full mode is strict.
 Follow the configured compact/full coverage profile and strict additional-case cap. In compact mode,
 combine boundary sizes, value patterns and layouts within fifteen cases; do not enumerate every size/layout pair.
 Cover the multi-vector remainder in each legal stride category; a single odd length or a transpose

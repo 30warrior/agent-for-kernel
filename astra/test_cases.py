@@ -23,7 +23,11 @@ Cover mixed signs and tails only where the reference contract permits them. Do n
 All proposed cases must run successfully on the reference model before freezing. Invalid cases return errors for repair.
 The suite is generated ONCE before candidate evaluation; never add/remove cases in response to candidate failures.
 Only propose additional input tensors within the supplied total byte budget; the original dataset is retained unchanged.
-The case count must be between minimum_additional_cases and maximum_additional_cases, inclusive.
+The case count must be exactly minimum_additional_cases and must not exceed maximum_additional_cases.
+For the default compact run this is exactly 15 additional cases. Submit the fixed-size
+specification even when the compact coverage report says partial; partial coverage is retained
+as a diagnostic and does not trigger an endless repair loop. Only full coverage mode rejects
+missing boundary/layout coverage.
 coverage must declare EVERY axis listed in coverage_requirements.axes, using the input's FINAL axes AFTER transpose:
 {"base_case":0,"input":0,"axis":1,"kind":"variable","reason":"Source reduces this resizable dimension"}.
 For a dimension fixed by weights/constructor/semantics use kind:"fixed" with a specific source-based reason.
@@ -47,7 +51,8 @@ may also be exempted with that specific reason. Never exempt a representable leg
 resizable axes fixed to avoid testing.
 When no SVE VL is readable, supplied generic sizes are diagnostic coverage, not an assumed hardware VL.
 The tool checks actual shapes and strides and returns missing coverage for you to repair BEFORE freezing.
-This samples vector and common unroll boundaries; it does not prove arbitrary candidate tile/loop coverage.
+This samples vector and common unroll boundaries when possible; compact coverage may be partial
+under the fixed case cap and does not prove arbitrary candidate tile/loop coverage.
 """
 
 
@@ -55,8 +60,12 @@ def validate_spec(spec, count, maximum=15):
     if not isinstance(spec, dict) or set(spec) != {"cases", "coverage"}:
         raise ValueError("Test specification must contain cases and coverage lists; legacy specs need a coverage declaration")
     cases = spec["cases"]
-    if not isinstance(cases, list) or not count <= len(cases) <= maximum:
-        raise ValueError(f"Expected {count} to {maximum} additional test cases")
+    if not isinstance(cases, list):
+        raise ValueError('cases must be a list')
+    if len(cases) != count:
+        raise ValueError(f"Expected exactly {count} additional test cases")
+    if len(cases) > maximum:
+        raise ValueError(f"Expected no more than {maximum} additional test cases")
     if not isinstance(spec['coverage'], list):
         raise ValueError('coverage must be a list of axis declarations')
     names, signatures = set(), set()

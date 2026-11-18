@@ -130,11 +130,15 @@ def check_coverage(spec, cases, metadata, profile='compact'):
         report.append(row)
         if gaps:
             missing.append(dict(axis=list(key), missing=gaps))
-    if declared != set(expected):
-        raise ValueError('Declare variable/fixed status for missing axes: ' + str(sorted(set(expected) - declared)))
-    result = dict(status='passed' if not missing else 'incomplete', profile=profile, axes=report,
+    undeclared = sorted(set(expected) - declared)
+    if undeclared and profile == 'full':
+        raise ValueError('Declare variable/fixed status for missing axes: ' + str(undeclared))
+    if undeclared:
+        missing.extend(dict(axis=list(key), missing={'declaration': ['missing']}) for key in undeclared)
+    result = dict(status='passed' if not missing else 'partial', profile=profile, axes=report,
+                  missing=missing,
                   unassessed_inputs=requirements['unassessed_inputs'], limitation=requirements['limitation'])
-    if missing:
+    if missing and profile == 'full':
         import json
         raise ValueError('Boundary coverage incomplete; repair the suite before freezing: ' + json.dumps(missing))
     return result
