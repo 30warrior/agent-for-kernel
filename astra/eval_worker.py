@@ -14,6 +14,14 @@ def main():
     from .backends import Backend
     from .evaluation import verify, benchmark
     reference = restore_reference(request["run_dir"])
+    if request['mode'] == 'perf_baseline':
+        from .cpu_profiling import profile_suite
+        if reference.metadata['target'] == 'cuda':
+            raise ValueError('CPU perf does not support CUDA targets')
+        result = profile_suite(reference, reference.model, Path(request['run_dir']) / 'perf_baseline',
+                               request['warmup'], request['perf_repeats'], request['perf_batch_mib'])
+        Path(request['result_path']).write_text(json.dumps(result, indent=2))
+        return
     if request["mode"] == "final_benchmark":
         import copy
         labels = reference.metadata.get("case_labels", [])
@@ -31,6 +39,14 @@ def main():
     artifact = json.loads((folder / "build.json").read_text())
     candidate = Backend(meta["target"], threads=meta.get("threads", 1)).load_candidate(artifact, folder / "model.py", reference.model)
     result = verify(reference, candidate, meta["target"], request["rtol"], request["atol"])
+    if request['mode'] == 'perf' and result['correctness'] == 'passed':
+        from .cpu_profiling import profile_suite
+        if meta['target'] == 'cuda':
+            raise ValueError('CPU perf does not support CUDA targets')
+        profile = profile_suite(reference, candidate, folder / 'perf', request['warmup'],
+                                request['perf_repeats'], request['perf_batch_mib'])
+        profile['correctness'] = result['correctness']
+        result = profile
     if request["mode"] == "benchmark":
         result = benchmark(reference, candidate, meta["target"], result, request["warmup"], request["trials"])
     if request["mode"] == "final_benchmark":

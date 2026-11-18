@@ -11,7 +11,9 @@ def execute(run_dir, candidate_dir, mode, settings):
     run_dir, candidate_dir = Path(run_dir).resolve(), Path(candidate_dir).resolve()
     request = dict(run_dir=str(run_dir), candidate_dir=str(candidate_dir), mode=mode,
                    rtol=settings.rtol, atol=settings.atol, warmup=settings.warmup,
-                   trials=settings.trials, result_path=str(candidate_dir / (mode + ".json")))
+                   trials=settings.trials, result_path=str(candidate_dir / (mode + ".json")),
+                   perf_repeats=getattr(settings, 'perf_repeats', 64),
+                   perf_batch_mib=getattr(settings, 'perf_batch_mib', 64))
     request_path = candidate_dir / (mode + "_request.json")
     request_path.write_text(json.dumps(request, indent=2))
     result_path = Path(request["result_path"])

@@ -29,6 +29,8 @@ def run_batch(args):
         else:
             command = [sys.executable, "-B", str(project / "kernel_optimizer.py")]
             excluded = {"api_key", "manifest", "task", "result_file", "list_tasks"}
+            if getattr(args, 'cpu_perf', True) is False:
+                command.append('--no-cpu-perf')
             for key, value in vars(args).items():
                 if key in excluded or value is None or value is False:
                     continue

@@ -140,6 +140,40 @@ starting selection, not a claim that generated code has passed validation.
 
 ## Batch runs and reports
 
+CPU workflows enable independent per-case `perf stat` diagnostics by default.
+ProfilingAgent exposes `profile_candidate` alongside the latency benchmark tool;
+the host enforces both operations even when the agent omits a tool call. Every
+correct version profiles every frozen case in its own perf session. Baseline
+cases are profiled once per run, using the same event list, repeat count, thread
+budget and affinity. PlanningAgent and the next CodeGenerator receive counters
+by case ID, including unsupported-event status and running percentages. No
+combined measurement across different cases is used.
+
+Use `--perf-repeats 64` (default) to control independent executions of each case,
+`--perf-batch-mib 64` to bound approximate prepared input/state/output storage,
+or `--no-cpu-perf` to disable these diagnostics. Each repeat starts with a fresh
+model/input copy. A single large case may exceed this batching budget. Counters
+start disabled and are enabled only around repeated forwards; loading,
+compilation, warmup and input/state preparation are excluded. Output allocation,
+Python loop/result retention and perf control boundary overhead remain included,
+so these are wrapper-level diagnostics rather than isolated native-kernel counts.
+Small cases can be dominated by this overhead. Repeats use distinct prepared
+inputs and retained outputs; cache state can differ from the latency benchmark.
+
+`perf -p` covers existing process threads and inherits new workers, so OpenMP
+work is included. Data requires Linux perf with `-D -1` and FD control support.
+Missing permissions, unsupported events and tool failures are recorded explicitly;
+they do not replace valid latency measurements or imply a zero count. Generic
+cache events do not identify L1/L2/L3. IPC with multiplexed events is approximate.
+CUDA workflows retain their existing timing path without CPU perf.
+
+Raw baseline results are in `perf_baseline.json` and
+`perf_baseline/case_0000/{perf_stat.csv,perf.log,perf.json}`. Each version writes
+`vN/perf.json` and `vN/perf/case_0000/...`, with separate directories for every
+case. `progress.json` and `benchmark_results.json` retain candidate diagnostics;
+saved strategy/generation prompts show the context actually supplied to agents.
+Counters never change version ranking or final original-dataset evaluation.
+
 ```bash
 python -B kernel_optimizer.py --dataset akg --dataset-root benchmarks/akg \
   --manifest manifests/akg_fp32.json --target sve --model YOUR_MODEL
@@ -173,5 +207,6 @@ GPU results are evaluated against their own native references, not each other's 
 Selected Arm Add execution checks have passed, including fixed extra test reuse
 in the related SSH branch. See docs/server-execution.md for this branch's setup
 and validation scope. This does not establish full dataset coverage or CUDA
-execution quality. CPU execution currently supports single-thread inference;
-thread scaling, broader numerical coverage and RAG remain future work.
+execution quality. CPU execution supports a shared thread budget for PyTorch and
+generated OpenMP kernels; performance across thread counts, broader numerical
+coverage and RAG require further evaluation.

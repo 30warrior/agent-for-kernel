@@ -117,6 +117,14 @@ Use the SAME frozen cases across ALL versions. Never generate new cases or synth
 Report measured case latencies and speedups relative to the corresponding reference baselines.
 Version selection uses the configured arithmetic/geometric mean speedup on generated cases.
 The application independently remeasures the frozen winner on original dataset cases after all iterations.
+When execution.evaluation.cpu_perf.enabled is true, also call profile_candidate after
+benchmark_candidate. Each frozen case has a separate perf-stat session, repeated independently;
+the baseline is profiled once per case and reused. Compare matching case IDs only.
+Report per-case IPC, cycles/instructions and cache/branch counters with their running percentages.
+Unsupported or missing events are unavailable, never zero. Generic cache events do not
+identify cache levels. Counters include wrapper/loop/control overhead and may multiplex;
+interpret them as diagnostic evidence and hypotheses, not pure-kernel cycles or ranking times.
+Never aggregate all cases into one counter measurement. Never invent measurements.
 """
 
 
@@ -149,14 +157,16 @@ def strategy_instructions(target, metadata=None):
         instructions = ("You are an expert Arm CPU kernel optimization strategist. Give concrete, implementable suggestions only (no code).\n"
                         + TARGET_GUIDANCE[target] + optimization_guidance(target))
     instructions += BOUNDARY_CORRECTNESS
-    return instructions + threading_guidance(target, metadata) + INDEPENDENT_KERNEL_POLICY + "\nPreserve the task semantics and public interface. Respect dtype, accuracy and the configured execution model. Analyze actual compiler errors, numerical failures and per-case timings. Distinguish measured facts from hypotheses. Never invent measurements."
+    return instructions + threading_guidance(target, metadata) + INDEPENDENT_KERNEL_POLICY + "\nPreserve the task semantics and public interface. Respect dtype, accuracy and the configured execution model. Analyze actual compiler errors, numerical failures and per-case timings. Use CPU perf data only for matching case IDs and supported events; account for running percentages, wrapper overhead and multiplexing. Do not infer a specific cache level or causal bottleneck from generic events alone. Distinguish measured facts from hypotheses. Never invent measurements."
 
 
 def public_metadata(value):
     """Internal identity/transport records do not belong in model context."""
-    excluded = {"source_path", "source_sha256", "source_hash", "dataset_root", "extension_path", "build_dir", "suite_id"}
+    excluded = {"source_path", "source_sha256", "source_hash", "dataset_root", "extension_path", "build_dir", "suite_id", "samples_ms"}
     if isinstance(value, dict):
-        return {key: public_metadata(item) for key, item in value.items() if key not in excluded}
+        from .cpu_profiling import perf_context
+        return {key: public_metadata(perf_context(item) if key in ('cpu_perf', 'baseline_perf', 'base_version_perf') and isinstance(item, dict) and 'events' in item else item)
+                for key, item in value.items() if key not in excluded}
     if isinstance(value, list):
         return [public_metadata(item) for item in value]
     return copy.deepcopy(value)
@@ -174,4 +184,7 @@ def execution_context(metadata, settings=None):
             compile_timeout=settings.compile_timeout, execution_timeout=settings.execution_timeout,
             timing_boundary="Model.forward including output allocation; excludes input cloning/state reset",
             timing="cuda_event" if metadata["target"] == "cuda" else "perf_counter_ns")
+        context['evaluation']['cpu_perf'] = dict(enabled=metadata['target'] != 'cuda' and getattr(settings, 'cpu_perf', True),
+            repeats=getattr(settings, 'perf_repeats', 64), batch_mib=getattr(settings, 'perf_batch_mib', 64),
+            protocol='Separate diagnostic session for EACH frozen case; baseline once, candidate every correct version; never used for ranking')
     return context

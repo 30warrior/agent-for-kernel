@@ -57,6 +57,8 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
     executor = executor or execute
     records, best, best_score, first_valid_score = [], None, None, None
     selection_metric = getattr(settings, "selection_metric", "geometric")
+    perf_enabled = settings.target != 'cuda' and getattr(settings, 'cpu_perf', True)
+    baseline_perf = {}
 
     def checked_execute(candidate_dir, mode):
         result = executor(folder, candidate_dir, mode, settings)
@@ -137,6 +139,15 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
             notify("correctness_checked", version=version, correctness=verification["correctness"])
             if verification["correctness"] == "passed":
                 measurement = {}
+                counters = {}
+
+                def collect_profile(directory, mode):
+                    try:
+                        return checked_execute(directory, mode)
+                    except Exception:
+                        return dict(status='unavailable', repeats=getattr(settings, 'perf_repeats', 64),
+                                    protocol='independent per-case perf', cases=[],
+                                    error=traceback.format_exc()[-12000:])
 
                 @function_tool
                 def benchmark_candidate() -> str:
@@ -145,7 +156,21 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
                         measurement.update(checked_execute(candidate_dir, "benchmark"))
                     return json.dumps(public_metadata(measurement))
 
-                benchmarker = Agent(name="ProfilingAgent", model=llm.model, tools=[benchmark_candidate], instructions=PROFILER)
+                def collect_counters():
+                    if not baseline_perf:
+                        baseline_perf.update(collect_profile(folder, 'perf_baseline'))
+                        context['execution']['baseline_perf'] = public_metadata({'baseline_perf': baseline_perf})['baseline_perf']
+                    if not counters:
+                        counters.update(collect_profile(candidate_dir, 'perf'))
+                    return public_metadata(dict(baseline_perf=baseline_perf, cpu_perf=counters))
+
+                @function_tool
+                def profile_candidate() -> str:
+                    """Collect independent perf counters for EVERY frozen CPU case; reuse baseline profiles."""
+                    return json.dumps(collect_counters())
+
+                tools = [benchmark_candidate] + ([profile_candidate] if perf_enabled else [])
+                benchmarker = Agent(name="ProfilingAgent", model=llm.model, tools=tools, instructions=PROFILER)
                 profiling_input = dict(context, action="profile_current_version", version=version,
                                        verification=public_metadata(verification), next_step="Send measured speedups to PlanningAgent")
                 (candidate_dir / "profiling_prompt.json").write_text(json.dumps(profiling_input, indent=2), encoding="utf-8")
@@ -157,6 +182,11 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
                 if not measurement:
                     measurement.update(checked_execute(candidate_dir, "benchmark"))
                 record.update(measurement)
+                if perf_enabled:
+                    collect_counters()  # Enforce real profiling even if the agent omits its tool.
+                    record['cpu_perf'] = counters
+                    if counters.get('correctness') == 'failed':
+                        record.update(correctness='failed', complete=False)
             record["status"] = "measured" if record["complete"] else "invalid"
         except Exception:
             record["status"] = "error"
@@ -187,7 +217,9 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
         base_version = version if current_score is None else best
         previous = sources(folder / base_version, settings.target)
         strategy_input = public_metadata(dict(context, base_version=base_version, previous=previous,
-                              latest_result=record, best_version=best, history=records,
+                              latest_result=record, best_version=best,
+                              history=[{key:value for key,value in item.items() if key != 'cpu_perf'} for item in records],
+                              base_version_perf=next((item.get('cpu_perf') for item in records if item['version'] == base_version), None),
                               next_version=f"v{index + 1}"))
         (candidate_dir / "strategy_prompt.json").write_text(json.dumps(strategy_input, indent=2))
         try:
@@ -197,7 +229,8 @@ def run(task, reference, baseline, folder, settings, llm, on_update=None, backen
         except Exception as error:
             suggestions = "Repair the recorded failure or improve the best valid candidate"
             (candidate_dir / "strategy_error.txt").write_text(str(error), encoding="utf-8")
-        feedback = public_metadata(dict(suggestions=suggestions, latest_result=record, base_version=base_version))
+        feedback = public_metadata(dict(suggestions=suggestions, latest_result=record, base_version=base_version,
+                                       base_version_perf=strategy_input.get('base_version_perf')))
         notify("suggestions_ready", from_version=version, next_version=f"v{index + 1}")
     payload["final_evaluation"] = finalize_best(folder, best, reference.metadata, settings, executor)
     payload["selection"]["final_evaluation_pending"] = False

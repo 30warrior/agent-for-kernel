@@ -39,6 +39,11 @@ def build_parser():
     parser.add_argument("--selection-metric", choices=("geometric", "arithmetic"), default="geometric",
                         help="Mean per-case speedup on frozen generated tests used to select the best version")
     parser.add_argument("--execution-timeout", type=int, default=300)
+    parser.add_argument("--cpu-perf", action=argparse.BooleanOptionalAction, default=True,
+                        help="Independently profile each frozen CPU case with perf stat (default: enabled)")
+    parser.add_argument("--perf-repeats", type=int, default=64)
+    parser.add_argument("--perf-batch-mib", type=float, default=64,
+                        help="Approximate prepared input/state/output memory budget for perf batches")
     parser.add_argument("--extra-test-cases", type=int, default=8,
                         help="Minimum additional cases; boundary coverage may require more (default: 8)")
     parser.add_argument("--max-extra-test-cases", type=int, default=128,
@@ -55,6 +60,8 @@ def execute_task(args, parser):
     import math
     if args.threads < 1:
         parser.error("--threads must be positive")
+    if args.perf_repeats < 1 or not math.isfinite(args.perf_batch_mib) or args.perf_batch_mib <= 0:
+        parser.error("perf-repeats and perf-batch-mib must be positive and finite")
     if args.extra_test_cases < 2 or not math.isfinite(args.test_suite_max_mib) or args.test_suite_max_mib <= 0:
         parser.error("extra-test-cases must be at least two and test-suite-max-mib must be positive and finite")
     if args.max_extra_test_cases < args.extra_test_cases:
