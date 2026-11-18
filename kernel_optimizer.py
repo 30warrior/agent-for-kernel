@@ -45,9 +45,11 @@ def build_parser():
     parser.add_argument("--perf-batch-mib", type=float, default=64,
                         help="Approximate prepared input/state/output memory budget for perf batches")
     parser.add_argument("--extra-test-cases", type=int, default=8,
-                        help="Minimum additional cases; boundary coverage may require more (default: 8)")
-    parser.add_argument("--max-extra-test-cases", type=int, default=128,
-                        help="Maximum additional cases, including required boundary/layout coverage (default: 128)")
+                        help="Minimum additional cases (default: 8; compact mode uses exactly 8 by default)")
+    parser.add_argument("--max-extra-test-cases", type=int,
+                        help="Additional-case cap (default: max(8, minimum) in compact mode; 128 in full mode)")
+    parser.add_argument('--test-coverage', choices=('compact', 'full'), default='compact',
+                        help='Compact boundary/layout coverage by default; full tests every boundary in every layout')
     parser.add_argument("--test-suite-max-mib", type=float, default=512,
                         help="Additional input storage budget; never resizes original dataset cases")
     parser.add_argument("--test-spec", help="Replay a saved test suite JSON instead of model test generation")
@@ -64,6 +66,8 @@ def execute_task(args, parser):
         parser.error("perf-repeats and perf-batch-mib must be positive and finite")
     if args.extra_test_cases < 2 or not math.isfinite(args.test_suite_max_mib) or args.test_suite_max_mib <= 0:
         parser.error("extra-test-cases must be at least two and test-suite-max-mib must be positive and finite")
+    if args.max_extra_test_cases is None:
+        args.max_extra_test_cases = 128 if args.test_coverage == 'full' else max(8, args.extra_test_cases)
     if args.max_extra_test_cases < args.extra_test_cases:
         parser.error('max-extra-test-cases must be at least extra-test-cases')
     if args.max_iterations < 0 or args.trials < 1 or args.warmup < 0:

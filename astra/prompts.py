@@ -99,7 +99,9 @@ Keep every original dataset case. Never change model initialization, weights, ta
 When generating tests, call generate_comprehensive_test_cases with a complete JSON specification.
 Choose practical small/medium cases, mixed signs, zeros and ones, broadcasting/strides and vector tails where legal.
 Use the supplied boundary coverage requirements and declare every input axis variable or fixed from the reference source.
-Cover vector and common unroll boundaries in each legal stride category; a single odd length or a transpose
+Follow the configured compact/full coverage profile and strict additional-case cap. In compact mode,
+combine boundary sizes, value patterns and layouts within eight cases; do not enumerate every size/layout pair.
+Cover the multi-vector remainder in each legal stride category; a single odd length or a transpose
 of unrelated axes does not establish tail coverage. Include nonzero values to reveal omitted contributions.
 Respect the reference source: parameterized layers may constrain channels, normalized shapes, dtypes and label ranges.
 Use the reference model to validate cases through the tool; repair invalid specifications rather than discarding cases.

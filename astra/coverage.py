@@ -1,15 +1,18 @@
 """Check declared boundary coverage against materialized inputs, before freezing."""
 
 
-def boundary_lengths(unit, minimum=1, multiple=1, maximum=None):
-    anchors = {1, unit - 1, unit, unit + 1, unit + max(1, unit // 2),
-               2 * unit - 1, 2 * unit, 2 * unit + 1, 4 * unit - 1, 4 * unit, 4 * unit + 1}
+def boundary_lengths(unit, minimum=1, multiple=1, maximum=None, profile='compact'):
+    anchors = {1, unit - 1, unit, unit + 1, unit + max(1, unit // 2), 4 * unit + 1}
+    if profile == 'full':
+        anchors.update({2 * unit - 1, 2 * unit, 2 * unit + 1, 4 * unit - 1, 4 * unit})
+    elif profile != 'compact':
+        raise ValueError('Unknown test coverage profile: ' + str(profile))
     # Keep source-constrained axes legal (e.g. channel multiples and convolution minima).
     values = {((max(minimum, n) + multiple - 1) // multiple) * multiple for n in anchors}
     return sorted(n for n in values if n >= minimum and (maximum is None or n <= maximum))
 
 
-def coverage_requirements(metadata):
+def coverage_requirements(metadata, profile='compact'):
     hardware = metadata.get('hardware', {})
     target = metadata['target']
     vector_bytes = 16 if target == 'neon' else hardware.get('cpu', {}).get('isa', {}).get('sve', {}).get('current_thread_vector_bytes')
@@ -31,14 +34,16 @@ def coverage_requirements(metadata):
                     unit_source='CUDA warp boundary guide (not an assumed kernel tile)' if target == 'cuda' else
                     'Observed vector bytes / dtype bytes; generated code must remain VL agnostic' if unit else
                     'Generic test sizes; actual SVE lane count unavailable',
-                    lengths=sorted({n for v in units for n in boundary_lengths(v)}),
+                    lengths=sorted({n for v in units for n in boundary_lengths(v, profile=profile)}),
+                    layout_lengths=sorted({v + max(1, v // 2) for v in units}) if profile == 'compact' else None,
                     layouts=['contiguous', 'unit_stride', 'strided'] if len(tensor['shape']) > 1 else ['contiguous', 'unit_stride']))
-    return dict(axes=axes, unassessed_inputs=unassessed,
+    return dict(profile=profile, axes=axes, unassessed_inputs=unassessed,
+        policy='Compact: cover boundary lengths across layouts jointly, plus the multi-vector remainder in each legal layout. Full: every length in every legal layout.',
         limitation='Coverage of declared boundaries is not proof of all shapes or candidate branches. Fixed axes, bounds and layout exemptions are agent claims about the reference contract, retained for review.')
 
 
-def check_coverage(spec, cases, metadata):
-    requirements = coverage_requirements(metadata)
+def check_coverage(spec, cases, metadata, profile='compact'):
+    requirements = coverage_requirements(metadata, profile)
     declarations = spec.get('coverage')
     if not isinstance(declarations, list):
         raise ValueError('A coverage list declaring every original top-level tensor axis is required')
@@ -71,7 +76,7 @@ def check_coverage(spec, cases, metadata):
         if type(minimum) is not int or minimum < 1 or type(multiple) is not int or multiple < 1 or (maximum is not None and (type(maximum) is not int or maximum < minimum)):
             raise ValueError('Invalid coverage dimension constraints')
         requirement = expected[key]
-        lengths = sorted({n for unit in requirement['units'] for n in boundary_lengths(unit, minimum, multiple, maximum)})
+        lengths = sorted({n for unit in requirement['units'] for n in boundary_lengths(unit, minimum, multiple, maximum, profile)})
         if not lengths:
             raise ValueError('Variable axis has no legal boundary sizes: ' + str(key))
         exemptions = plan.get('layout_exemptions', {})
@@ -100,9 +105,20 @@ def check_coverage(spec, cases, metadata):
                     observed[layout].add(tensor.shape[key[2]])
         # A singleton axis has no stride-dependent traversal. Coupled shapes such
         # as square 1x1 matrices cannot produce a non-unit stride by transposing.
-        required = {layout: [n for n in lengths if layout != 'strided' or n > 1] for layout in layouts}
+        layout_lengths = lengths
+        if profile == 'compact':
+            layout_lengths = sorted({((max(minimum, unit + max(1, unit // 2)) + multiple - 1) // multiple) * multiple
+                                     for unit in requirement['units']})
+            layout_lengths = [n for n in layout_lengths if maximum is None or n <= maximum]
+            if not layout_lengths:
+                layout_lengths = [lengths[-1]]
+        required = {layout: [n for n in layout_lengths if layout != 'strided' or n > 1] for layout in layouts}
         gaps = {layout: sorted(set(required[layout]) - observed[layout]) for layout in layouts
                 if set(required[layout]) - observed[layout]}
+        if profile == 'compact':
+            covered = set().union(*observed.values())
+            if set(lengths) - covered:
+                gaps['any_layout'] = sorted(set(lengths) - covered)
         row = dict(declaration=plan, required_lengths=lengths,
                    required_lengths_by_layout=required,
                    observed_lengths={k: sorted(v) for k, v in observed.items()}, missing=gaps)
@@ -111,7 +127,7 @@ def check_coverage(spec, cases, metadata):
             missing.append(dict(axis=list(key), missing=gaps))
     if declared != set(expected):
         raise ValueError('Declare variable/fixed status for missing axes: ' + str(sorted(set(expected) - declared)))
-    result = dict(status='passed' if not missing else 'incomplete', axes=report,
+    result = dict(status='passed' if not missing else 'incomplete', profile=profile, axes=report,
                   unassessed_inputs=requirements['unassessed_inputs'], limitation=requirements['limitation'])
     if missing:
         import json

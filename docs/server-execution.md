@@ -39,11 +39,13 @@ bash run_server.sh --dataset akg --dataset-root benchmarks/akg \
 运行时向量长度，不得假定 SVE2、SME 或编译器未提供的桥接 intrinsics 可用。
 每个目标只加载自己的 Markdown 文件；修改后在下一次启动时生效。
 
-默认 TestingAgent 一次生成至少 8、至多 128 个额外样例，先全部在参考模型上验证，再冻结为
+默认采用 compact 覆盖，TestingAgent 一次生成恰好 8 个额外样例，先全部在参考模型上验证，再冻结为
 `test_suite.json` 和 `reference.pt`。所有版本复用同一组原始及额外样例；正确性
 不通过的版本不计时。编译失败不能进行正确性检查。可用
 `--extra-test-cases` 调整额外数量下限（至少 2），`--max-extra-test-cases` 调整上限，
-或 `--test-spec` 重放包含覆盖声明的已保存规格。
+或 `--test-spec` 重放包含覆盖声明的已保存规格。只有 1 个原始样例时，每轮共测 9 个。
+`--test-coverage full` 恢复完整覆盖，默认额外样例上限为 128；compact 的默认上限
+为 max(8, extra-test-cases)。显式指定的上限始终生效。
 
 所有版本仍检查并计时完整固定测试集，但最佳版本排名改为使用生成样例的
 平均加速比，默认几何平均。迭代结束后只对选中的版本进行一次原始样例复测。
@@ -108,8 +110,9 @@ Testing Agent 在生成阶段补齐覆盖，在逐版验证阶段审查代码与
 
 `astra/coverage.py` 从目标和 dtype 计算边界指导：NEON 使用 16 字节，SVE 使用
 实测当前线程 VL；读取不到 SVE VL 时使用明确标注的通用尺寸。CUDA 使用 warp
-宽度 32 作为线程边界指导，并不声称它就是候选 tile。尺寸包含 1、V 附近、
-V+V/2、2V 附近及 4V 附近，始终不要求生成代码写死该 V。
+宽度 32 作为线程边界指导，并不声称它就是候选 tile。compact 尺寸为 1、V−1、V、
+V+1、V+max(1, floor(V/2)) 和 4V+1；full 另外覆盖 2V 和 4V 两侧及整点。
+始终不要求生成代码写死该 V。
 
 测试规格顶层现在要求 `cases` 和 `coverage` 两个列表。每个原始顶层 Tensor 的
 每个轴都需声明，例如：
@@ -118,7 +121,10 @@ V+V/2、2V 附近及 4V 附近，始终不要求生成代码写死该 V。
 {"base_case": 0, "input": 0, "axis": 1, "kind": "variable", "reason": "参考源码允许改变规约长度"}
 ```
 
-可变轴必须在各指定尺寸覆盖 contiguous、unit_stride、strided 类别，判断依据
+compact 中，可变轴的指定尺寸在合法布局之间合并覆盖，不再要求尺寸与布局的全组合。
+但 V+max(1, floor(V/2)) 这一展开循环余数仍须覆盖每个合法的 contiguous、unit_stride、
+strided 类别，以保留对“只处理一个剩余向量”错误的检查。full 仍要求每个尺寸覆盖每种布局。
+判断依据
 为生成后张量的 `is_contiguous()` 和该轴实际 stride；transpose 后的轴才是声明
 中的 axis。用小的其他维度控制成本，耦合维度仍须合法。一个样例可满足多个检查。
 长度为 1 的轴没有步长遍历，不要求 strided 覆盖，避免要求 1x1 方阵等不可能的布局。
