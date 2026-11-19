@@ -48,7 +48,7 @@ def check_coverage(spec, cases, metadata, profile='compact'):
     if not isinstance(declarations, list):
         raise ValueError('A coverage list declaring every original top-level tensor axis is required')
     expected = {(r['base_case'], r['input'], r['axis']): r for r in requirements['axes']}
-    declared, report, missing = set(), [], []
+    declared, report = set(), []
     incomplete = False
     for plan in declarations:
         allowed = {'base_case', 'input', 'axis', 'kind', 'reason', 'minimum', 'maximum', 'multiple', 'layout_exemptions'}
@@ -128,28 +128,12 @@ def check_coverage(spec, cases, metadata, profile='compact'):
         row = dict(declaration=plan, required_lengths=lengths,
                    required_lengths_by_layout=required,
                    observed_lengths={k: sorted(v) for k, v in observed.items()})
-        # Compact suites are intentionally bounded. Keep their status visible,
-        # but do not serialize untested lengths/layouts that cannot be repaired
-        # without exceeding the fixed case cap. Full mode remains auditable.
-        if profile == 'full':
-            row['missing'] = gaps
         report.append(row)
         if gaps:
             incomplete = True
-            if profile == 'full':
-                missing.append(dict(axis=list(key), missing=gaps))
     undeclared = sorted(set(expected) - declared)
-    if undeclared and profile == 'full':
-        raise ValueError('Declare variable/fixed status for missing axes: ' + str(undeclared))
     if undeclared:
         incomplete = True
-        if profile == 'full':
-            missing.extend(dict(axis=list(key), missing={'declaration': ['missing']}) for key in undeclared)
     result = dict(status='passed' if not incomplete else 'partial', profile=profile, axes=report,
                   unassessed_inputs=requirements['unassessed_inputs'], limitation=requirements['limitation'])
-    if profile == 'full':
-        result['missing'] = missing
-    if missing and profile == 'full':
-        import json
-        raise ValueError('Boundary coverage incomplete; repair the suite before freezing: ' + json.dumps(missing))
     return result

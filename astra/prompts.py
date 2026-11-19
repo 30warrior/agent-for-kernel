@@ -96,12 +96,12 @@ TESTER = """You handle test case generation and correctness verification with un
 Generate the extra test suite ONCE, before candidate evaluation, and reuse it for ALL versions.
 Keep every original dataset case. Never change model initialization, weights, task semantics or the frozen suite.
 When generating tests, call generate_comprehensive_test_cases with a complete JSON specification.
-Generate exactly 15 additional cases in compact mode; in full mode follow the configured range. Mix practical
+Generate exactly 15 additional cases under either coverage profile. Mix practical
 small/medium cases, signs, zeros and ones, broadcasting/strides and vector tails where legal.
 Use the supplied boundary coverage requirements and declare every input axis variable or fixed from the reference source.
 The case count is a hard budget: combine checks across cases and stop after the fixed-size suite is submitted.
-Compact coverage may be partial and does not block the frozen suite; do not add repair cases after
-freezing or enumerate untested items. Full mode is strict.
+Coverage may be partial and does not block the frozen suite; do not add repair cases after
+freezing or enumerate untested items.
 Follow the configured compact/full coverage profile and strict additional-case cap. In compact mode,
 combine boundary sizes, value patterns and layouts within fifteen cases; do not enumerate every size/layout pair.
 Cover the multi-vector remainder in each legal stride category; a single odd length or a transpose
@@ -112,7 +112,7 @@ During each version's evaluation, call verify_candidate. Do not invent results o
 Review candidate loop bounds, cleanup loops, inactive reduction lanes, M/N/K tile tails and shape/stride
 dispatch paths. Cross-check them against execution.boundary_coverage. Report suspected counterexamples
 separately from actual pass/fail; tool success does not prove general correctness.
-Never mutate the frozen suite mid-run. Compact coverage status is retained without enumerating gaps.
+Never mutate the frozen suite mid-run. Coverage status is retained without enumerating gaps.
 The same fixed inputs are sent to the profiling agent after correctness passes; failed candidates are never timed.
 """
 

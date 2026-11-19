@@ -117,10 +117,9 @@ dataset case (16 total for a task with one original case). Boundary sizes share
 layout coverage instead of testing every size/layout combination. The multi-vector
 remainder is required in the union of layouts, and each legal layout must appear at
 least once for every variable axis.
-This reduces sampling coverage; use `--test-coverage full` to restore the full
-boundary/layout grid and an automatic cap of 128 extras. Compact mode requires
-exactly 15 extras, including when replaying a test specification. Partial
-compact coverage is retained without listing untested items, and cases are never
+Use `--test-coverage full` to request a broader boundary/layout grid within the
+same fixed 15 extras. Both profiles require exactly 15 extras, including when
+replaying a test specification. Partial coverage is retained without listing untested items, and cases are never
 silently dropped after freezing.
 Every compiled version is checked by TestingAgent and, on success, measured by
 ProfilingAgent. PlanningAgent uses hardware-specific guidance and actual results

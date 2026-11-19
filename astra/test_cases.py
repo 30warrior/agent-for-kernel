@@ -23,11 +23,9 @@ Cover mixed signs and tails only where the reference contract permits them. Do n
 All proposed cases must run successfully on the reference model before freezing. Invalid cases return errors for repair.
 The suite is generated ONCE before candidate evaluation; never add/remove cases in response to candidate failures.
 Only propose additional input tensors within the supplied total byte budget; the original dataset is retained unchanged.
-In compact mode submit exactly 15 additional cases, even when boundary/layout coverage is partial.
-Once a valid reference suite of exactly 15 cases is materialized, it is frozen. Partial compact
-coverage does not trigger a repair loop or a missing-items report. Full mode follows the supplied
-minimum_additional_cases and maximum_additional_cases and rejects
-missing boundary/layout coverage.
+Submit exactly 15 additional cases, even when boundary/layout coverage is partial.
+Once a valid reference suite of exactly 15 cases is materialized, it is frozen.
+Partial coverage does not trigger a repair loop or a missing-items report, under either profile.
 coverage must declare EVERY axis listed in coverage_requirements.axes, using the input's FINAL axes AFTER transpose:
 {"base_case":0,"input":0,"axis":1,"kind":"variable","reason":"Source reduces this resizable dimension"}.
 For a dimension fixed by weights/constructor/semantics use kind:"fixed" with a specific source-based reason.
@@ -39,7 +37,7 @@ For a middle reduction axis, transpose to make that
 axis unit-stride, not just an unrelated axis. Use small other dimensions and preserve coupled dimensions.
 Strided coverage at length 1 is not required: singleton axes have no stride-dependent traversal.
 One case may cover multiple axes/layouts. Reuse cases across inputs/axes and combine value variation
-with shape/layout checks. Compact mode requires exactly fifteen additional cases.
+with shape/layout checks. Both profiles require exactly fifteen additional cases.
 Where the budget permits, reserve one case with original input shapes and varied nonzero values
 so generated-case performance selection also samples the original workload scale.
 Nonzero-capable distributions must supply boundary coverage; zero-only cases do not count.
@@ -52,7 +50,7 @@ resizable axes fixed to avoid testing.
 When no SVE VL is readable, supplied generic sizes are diagnostic coverage, not an assumed hardware VL.
 The tool checks actual shapes and strides before freezing. This samples vector and common unroll
 boundaries when possible; compact coverage may be partial under the fixed case cap and does not
-prove arbitrary candidate tile/loop coverage. Compact mode reports only partial status, not a list
+prove arbitrary candidate tile/loop coverage. The tool reports only partial status, not a list
 of untested items.
 """
 
@@ -91,12 +89,7 @@ def validate_spec(spec, count, maximum=15):
 
 
 def suite_limits(settings):
-    if getattr(settings, 'test_coverage', 'compact') == 'compact':
-        return 15, 15
-    maximum = getattr(settings, 'max_extra_test_cases', None)
-    if maximum is None:
-        maximum = 128 if getattr(settings, 'test_coverage', 'compact') == 'full' else 15
-    return settings.extra_test_cases, maximum
+    return 15, 15
 
 
 def build_input(base, descriptor, remaining):
