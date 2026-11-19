@@ -43,6 +43,8 @@ def select_cpu_execution(threads=None, cpu_core=None, cpu_cores=None):
     allowed = set(os.sched_getaffinity(0))
     if cpu_core is not None and cpu_cores is not None:
         raise ValueError("Use either --cpu-core or --cpu-cores")
+    if threads is not None and (threads < 2 or threads > 32 or threads % 2):
+        raise ValueError("CPU thread budget must be an even number between 2 and 32")
     if cpu_cores is not None:
         selected = parse_cpu_list(cpu_cores)
         if threads is None:
@@ -51,13 +53,20 @@ def select_cpu_execution(threads=None, cpu_core=None, cpu_cores=None):
             raise ValueError("--cpu-cores must contain exactly --threads logical CPU IDs")
         if not set(selected) <= allowed:
             raise ValueError("--cpu-cores contains CPUs outside this process's allowed affinity")
+        topology = [cpu_topology(cpu) for cpu in selected]
+        numa_nodes = {info["numa_node"] for info in topology if info["numa_node"] is not None}
+        if len(numa_nodes) > 1:
+            raise ValueError("--cpu-cores must stay within one NUMA node")
         policy = "explicit"
     else:
         if threads is None:
-            # Keep automatic runs bounded while still using multiple physical
-            # cores for large cases. Per-case plans may select fewer cores.
-            threads = min(8, len({(cpu_topology(cpu)["package"], cpu_topology(cpu)["core"]) for cpu in allowed}))
-            threads = max(1, threads)
+            # Keep automatic runs on one NUMA node and cap them at 32 even
+            # when the host exposes more physical cores.
+            available = len({(cpu_topology(cpu)["package"], cpu_topology(cpu)["core"]) for cpu in allowed})
+            threads = min(32, available)
+            threads -= threads % 2
+            if threads < 2:
+                raise ValueError("Automatic CPU execution requires at least two physical cores")
         anchor = min(allowed) if cpu_core is None else cpu_core
         if anchor not in allowed:
             raise ValueError("--cpu-core is outside this process's allowed affinity")
@@ -103,12 +112,16 @@ def value_nbytes(value):
 
 
 def threads_for_bytes(nbytes, maximum):
-    if maximum <= 1 or nbytes <= 4 * 2**20:
-        return 1
+    if maximum < 2 or maximum % 2:
+        raise ValueError("Automatic CPU thread maximum must be an even number of at least two")
+    if nbytes <= 4 * 2**20:
+        return 2
     if nbytes <= 32 * 2**20:
-        return min(2, maximum)
-    if nbytes <= 256 * 2**20:
         return min(4, maximum)
+    if nbytes <= 128 * 2**20:
+        return min(8, maximum)
+    if nbytes <= 512 * 2**20:
+        return min(16, maximum)
     return maximum
 
 

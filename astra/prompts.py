@@ -146,10 +146,11 @@ def threading_guidance(target, metadata=None):
     threads = (metadata or {}).get("threads", 1)
     plan = (metadata or {}).get('thread_plan')
     if plan:
-        return (f"\nCPU execution: automatic per-case thread plan, at most {threads} threads. "
+        return (f"\nCPU execution: automatic per-case thread plan, even counts up to {threads} threads. "
                 "The PyTorch baseline and generated kernel use the same thread count for each case; "
                 "the plan is selected from input bytes and is recorded in execution.thread_plan. "
-                "Use OpenMP/SIMD for sufficiently large cases and avoid assuming every case uses the maximum.\n")
+                "All selected workers stay on one NUMA node. Use OpenMP/SIMD for sufficiently large cases "
+                "and avoid assuming every case uses the maximum.\n")
     if threads == 1:
         return "\nCPU execution: exactly one thread. Do not use OpenMP, worker pools or external threaded libraries.\n"
     return (f"\nCPU execution: at most {threads} threads, on the supplied fixed CPU affinity. "

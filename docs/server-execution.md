@@ -195,7 +195,8 @@ Tensor 类型、元数据查询、数据指针、空输出/工作区分配、只
 换服务器时应重新确认或移除此文件，不复用旧机器型号。服务器 `armv8_sve` 的
 Kunpeng 920 型号来自用户于 2026-11-17 的确认，而不是根据 CPU part 推断。
 
-省略 `--threads` 时，框架根据每个样例的输入字节数自动选择 1、2、4 或最大线程数；
+省略 `--threads` 时，框架根据每个样例的输入字节数自动选择 2、4、8、16 或最大线程数；
+自动线程数均为 2 的倍数，最大为 32，且只从同一 NUMA 节点选择物理核心；
 PyTorch baseline、候选 kernel 和 perf 使用同一份 `thread_plan`。显式设置 `--threads N`
 仍可固定最大线程预算。N > 1 时，CPU 编译和链接均启用 `-fopenmp`，
 Coding/Planning Agent 获得对应线程预算，允许生成 OpenMP + NEON/SVE 实现。

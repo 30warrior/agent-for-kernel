@@ -67,8 +67,9 @@ must be excluded from CPU manifests. Dynamic AKG tasks use get_inputs_dyn_list.
 Add `--task static_shape/elemwise/elemwise_add_001.py --target neon --prepare-only`
 to an AKG invocation to materialize fixed inputs and reference outputs and measure
 the baseline. This explicitly runs the reference, so only invoke it when desired.
-When `--threads` is omitted, CPU inference selects a per-case budget of 1, 2, 4, or the
-automatic maximum from input size; PyTorch and generated kernels use the same budget.
+When `--threads` is omitted, CPU inference selects an even per-case budget from 2 through
+32 based on input size and keeps workers on one NUMA node; PyTorch and generated kernels use
+the same budget.
 The default timing protocol uses five warmups and thirty samples.
 Files stay under `optimization_runs/` inside this repository. Stateful/stochastic
 training tasks are outside the initial inference contract. Reference snapshots
