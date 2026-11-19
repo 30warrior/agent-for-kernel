@@ -60,13 +60,14 @@ def _command(process, descriptor, acknowledgement, command, timeout=10):
         raise RuntimeError(f'perf control {command} did not acknowledge: {reply!r}; exit={process.poll()}')
 
 
-def profile_case(model, case, expected, destination, warmup, repeats, batch_mib):
+def profile_case(model, case, expected, destination, warmup, repeats, batch_mib, execution=None, case_threads=None):
     import torch
     from .reference import clone_inputs, describe
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     raw, log = destination / 'perf_stat.csv', destination / 'perf.log'
     result = dict(status='unavailable', repeats=repeats, inputs=describe(case), events=list(EVENTS),
+        threads=case_threads,
         counters={}, ipc=None, raw_path=str(raw), log_path=str(log),
         scope='Model.forward including output allocation, Python loop/result retention and perf control boundary overhead; excludes model/input preparation, warmup, loading and compilation',
         thread_scope='perf -p enumerates target process threads; default inheritance includes new workers; counters sum participating threads',
@@ -79,6 +80,9 @@ def profile_case(model, case, expected, destination, warmup, repeats, batch_mib)
     process = None
     descriptors = []
     try:
+        if execution is not None and case_threads is not None:
+            from .cpu_execution import apply_case_execution
+            apply_case_execution(execution, case_threads, torch)
         with torch.inference_mode():
             for _ in range(warmup):
                 model.load_state_dict(state)
@@ -148,8 +152,11 @@ def profile_suite(reference, model, destination, warmup=5, repeats=64, batch_mib
     labels = reference.metadata['case_labels']
     results = []
     for index, (case, expected, label) in enumerate(zip(reference.cases, reference.expected, labels)):
+        plan = reference.metadata.get('thread_plan', [])
         result = profile_case(copy.deepcopy(model), case, expected, destination / f'case_{index:04d}',
-                              warmup, repeats, batch_mib)
+                              warmup, repeats, batch_mib,
+                              execution=reference.metadata.get('cpu_execution'),
+                              case_threads=plan[index]['threads'] if plan else None)
         result.update(case_id=index, **label)
         (destination / f'case_{index:04d}' / 'perf.json').write_text(json.dumps(result, indent=2))
         results.append(result)
@@ -164,7 +171,7 @@ def perf_context(profile):
     """Keep per-case attribution without sending raw totals/logs to the model."""
     return dict(status=profile['status'], repeats=profile['repeats'], protocol=profile['protocol'],
         interpretation='per_call counters normalized by repeats; compare same case and event only. Unsupported/missing counts are null. Counts include wrapper/loop/control overhead. No cache level or causal bottleneck is inferred.',
-        cases=[dict(case_id=c['case_id'], name=c['name'], origin=c['origin'], status=c['status'],
+        cases=[dict(case_id=c['case_id'], name=c['name'], origin=c['origin'], status=c['status'], threads=c.get('threads'),
             ipc=c['ipc'], batch_size=c.get('batch_size'), error=c.get('error'),
             counters={event:dict(status=v['status'], per_call=v['per_call'], unit=v['unit'],
                                 percent_running=v.get('percent_running')) for event,v in c['counters'].items()})

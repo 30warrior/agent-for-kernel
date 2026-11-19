@@ -15,7 +15,7 @@ def build_parser():
     parser.add_argument("--target", choices=("cuda", "neon", "sve"), default="neon")
     parser.add_argument("--list-tasks", action="store_true", help="List definitions without importing tasks or running kernels")
     parser.add_argument("--prepare-only", action="store_true", help="Prepare and benchmark the PyTorch reference; no LLM calls")
-    parser.add_argument("--threads", type=int, default=1, help="CPU thread budget shared by PyTorch and OpenMP kernels (default: 1)")
+    parser.add_argument("--threads", type=int, help="Maximum CPU threads; omitted means automatic per-case sizing")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--trials", type=int, default=30)
@@ -60,14 +60,18 @@ def build_parser():
 
 def execute_task(args, parser):
     import math
-    if args.threads < 1:
+    if args.threads is not None and args.threads < 1:
         parser.error("--threads must be positive")
     if args.perf_repeats < 1 or not math.isfinite(args.perf_batch_mib) or args.perf_batch_mib <= 0:
         parser.error("perf-repeats and perf-batch-mib must be positive and finite")
     if args.extra_test_cases < 2 or not math.isfinite(args.test_suite_max_mib) or args.test_suite_max_mib <= 0:
         parser.error("extra-test-cases must be at least two and test-suite-max-mib must be positive and finite")
+    if args.test_coverage == 'compact' and args.extra_test_cases > 15:
+        parser.error('compact coverage allows at most 15 additional test cases')
+    if args.test_coverage == 'compact' and args.max_extra_test_cases is not None and args.max_extra_test_cases > 15:
+        parser.error('compact coverage allows at most 15 additional test cases')
     if args.max_extra_test_cases is None:
-        args.max_extra_test_cases = 128 if args.test_coverage == 'full' else max(15, args.extra_test_cases)
+        args.max_extra_test_cases = 128 if args.test_coverage == 'full' else 15
     if args.max_extra_test_cases < args.extra_test_cases:
         parser.error('max-extra-test-cases must be at least extra-test-cases')
     if args.max_iterations < 0 or args.trials < 1 or args.warmup < 0:
@@ -100,19 +104,23 @@ def execute_task(args, parser):
         except (ValueError, OSError) as error:
             parser.error(str(error))
         print("CPU execution:", json.dumps(cpu_execution), flush=True)
-    elif args.cpu_core is not None or args.cpu_cores is not None or args.threads != 1:
-        parser.error("--threads > 1 and CPU affinity options apply only to CPU targets")
+    elif args.cpu_core is not None or args.cpu_cores is not None or args.threads is not None:
+        parser.error("CPU thread and affinity options apply only to CPU targets")
     from astra.reference import prepare_reference, save_reference
     from astra.backends import Backend
     from astra.timing import measure
     task = load_task(args.dataset, args.dataset_root, args.task)
-    backend = Backend(args.target, args.compile_timeout, threads=args.threads)
+    effective_threads = cpu_execution['threads'] if cpu_execution else (args.threads or 1)
+    backend = Backend(args.target, args.compile_timeout, threads=effective_threads)
     hardware = backend.capabilities()
-    reference = prepare_reference(task, args.target, args.seed, args.threads, cpu_execution=cpu_execution)
+    reference = prepare_reference(task, args.target, args.seed, effective_threads, cpu_execution=cpu_execution)
     reference.metadata["hardware"] = hardware
     folder = Path(__file__).resolve().parent / "optimization_runs" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     save_reference(reference, folder)
-    baseline = [measure(reference.model, case, args.target, args.warmup, args.trials) for case in reference.cases]
+    baseline = [measure(reference.model, case, args.target, args.warmup, args.trials,
+                        execution=reference.metadata.get('cpu_execution'),
+                        case_threads=reference.metadata.get('thread_plan', [])[index]['threads'] if reference.metadata.get('thread_plan') else None)
+                for index, case in enumerate(reference.cases)]
     (folder / "baseline.json").write_text(json.dumps(baseline, indent=2))
     print("Run directory:", folder, flush=True)
     if args.prepare_only:

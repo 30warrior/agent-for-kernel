@@ -56,13 +56,13 @@ class Reference:
     metadata: dict
 
 
-def prepare_reference(task, target, seed=42, threads=1, cpu_execution=None):
+def prepare_reference(task, target, seed=42, threads=1, cpu_execution=None, thread_plan=None):
     if threads < 1:
         raise ValueError("threads must be positive")
     if target == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA target requires an available CUDA device")
     device = torch.device("cuda" if target == "cuda" else "cpu")
-    from .cpu_execution import configure_torch_threads, runtime_snapshot
+    from .cpu_execution import configure_torch_threads, runtime_snapshot, apply_cpu_execution
     if target == "cuda":
         torch.set_num_threads(threads)
     else:
@@ -88,18 +88,28 @@ def prepare_reference(task, target, seed=42, threads=1, cpu_execution=None):
             if not isinstance(case, (list, tuple)):
                 raise ValueError("Each case must be a list/tuple of positional arguments")
             cases.append(map_tree(case, lambda tensor: tensor.detach().to(device)))
+    from .cpu_execution import apply_case_execution, build_thread_plan
+    if target != "cuda" and cpu_execution is not None:
+        thread_plan = thread_plan or build_thread_plan(cases, cpu_execution["threads"])
     expected, mutated = [], []
-    for case in cases:
+    for index, case in enumerate(cases):
+        if target != "cuda" and cpu_execution is not None:
+            apply_case_execution(cpu_execution, (thread_plan or [])[index]["threads"], torch)
         inputs = clone_inputs(case)
         with torch.inference_mode():
             output = copy.deepcopy(model)(*inputs)
         expected.append(map_tree(output, lambda tensor: tensor.detach().clone()))
         mutated.append(clone_inputs(inputs))
+    if target != "cuda" and cpu_execution is not None:
+        apply_cpu_execution(cpu_execution)
+        configure_torch_threads(torch, cpu_execution["threads"])
     metadata = dict(task.metadata(), target=target, seed=seed, threads=threads,
                     mode="eval/inference", torch_version=torch.__version__,
                     affinity=sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
                     init_inputs=describe(init), cases=[describe(case) for case in cases],
                     outputs=[describe(output) for output in expected])
+    if thread_plan is not None:
+        metadata["thread_plan"] = thread_plan
     if cpu_execution is not None:
         metadata["affinity"] = list(cpu_execution["affinity"])
         metadata["cpu_execution"] = runtime_snapshot(torch, cpu_execution)
@@ -125,7 +135,9 @@ def restore_reference(directory):
     task = load_task(meta["dataset"], meta["dataset_root"], meta["task_id"])
     if task.source_hash != meta["source_sha256"]:
         raise RuntimeError("Task source changed after reference preparation")
-    reference = prepare_reference(task, meta["target"], meta["seed"], meta["threads"])
+    reference = prepare_reference(task, meta["target"], meta["seed"], meta["threads"],
+                                 cpu_execution=meta.get("cpu_execution"),
+                                 thread_plan=meta.get("thread_plan"))
     snapshot = torch.load(directory / "reference.pt", weights_only=False,
                           map_location="cuda" if meta["target"] == "cuda" else "cpu")
     reference.model.load_state_dict(snapshot["model_state"])

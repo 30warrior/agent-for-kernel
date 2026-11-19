@@ -50,6 +50,10 @@ def verify(reference, candidate, target, rtol=None, atol=None):
         labels = reference.metadata.get("case_labels", [])
         record.update(labels[index] if labels else dict(name=f"dataset_{index}", origin="dataset"))
         try:
+            if target != "cuda" and reference.metadata.get("cpu_execution"):
+                from .cpu_execution import apply_case_execution
+                apply_case_execution(reference.metadata["cpu_execution"],
+                                     reference.metadata.get("thread_plan", [])[index]["threads"], torch)
             inputs = clone_inputs(case)
             model = copy.deepcopy(candidate)
             with torch.inference_mode():
@@ -74,7 +78,10 @@ def benchmark(reference, candidate, target, verification, warmup=5, trials=30):
         return result
     for record, case in zip(result["cases"], reference.cases):
         try:
-            record["benchmark"] = measure(copy.deepcopy(candidate), case, target, warmup, trials)
+            plan = reference.metadata.get("thread_plan", [])
+            record["benchmark"] = measure(copy.deepcopy(candidate), case, target, warmup, trials,
+                                           execution=reference.metadata.get("cpu_execution"),
+                                           case_threads=plan[record["case_id"]]["threads"] if plan else None)
         except Exception:
             record["error"] = traceback.format_exc()[-12000:]
     result["complete"] = bool(result["cases"]) and all(record["benchmark"] is not None for record in result["cases"])

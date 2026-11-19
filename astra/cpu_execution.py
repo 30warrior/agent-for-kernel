@@ -1,4 +1,5 @@
 """One CPU resource budget shared by reference, native kernel and worker processes."""
+import ctypes
 import os
 from pathlib import Path
 
@@ -36,9 +37,7 @@ def cpu_topology(cpu):
                 numa_node=nodes[0] if nodes else None)
 
 
-def select_cpu_execution(threads, cpu_core=None, cpu_cores=None):
-    if threads < 1:
-        raise ValueError("--threads must be positive")
+def select_cpu_execution(threads=None, cpu_core=None, cpu_cores=None):
     if not hasattr(os, "sched_getaffinity"):
         raise ValueError("CPU execution requires Linux CPU affinity support")
     allowed = set(os.sched_getaffinity(0))
@@ -46,12 +45,19 @@ def select_cpu_execution(threads, cpu_core=None, cpu_cores=None):
         raise ValueError("Use either --cpu-core or --cpu-cores")
     if cpu_cores is not None:
         selected = parse_cpu_list(cpu_cores)
+        if threads is None:
+            threads = len(selected)
         if len(selected) != threads:
             raise ValueError("--cpu-cores must contain exactly --threads logical CPU IDs")
         if not set(selected) <= allowed:
             raise ValueError("--cpu-cores contains CPUs outside this process's allowed affinity")
         policy = "explicit"
     else:
+        if threads is None:
+            # Keep automatic runs bounded while still using multiple physical
+            # cores for large cases. Per-case plans may select fewer cores.
+            threads = min(8, len({(cpu_topology(cpu)["package"], cpu_topology(cpu)["core"]) for cpu in allowed}))
+            threads = max(1, threads)
         anchor = min(allowed) if cpu_core is None else cpu_core
         if anchor not in allowed:
             raise ValueError("--cpu-core is outside this process's allowed affinity")
@@ -83,6 +89,60 @@ def select_cpu_execution(threads, cpu_core=None, cpu_cores=None):
     return dict(threads=threads, affinity=selected, affinity_policy=policy, topology=topology,
         numa_nodes=sorted({info["numa_node"] for info in topology if info["numa_node"] is not None}),
         torch_interop_threads=1, openmp_enabled=threads > 1, environment=environment)
+
+
+def value_nbytes(value):
+    """Approximate tensor storage used to choose a case's CPU thread budget."""
+    if hasattr(value, 'numel') and hasattr(value, 'element_size'):
+        return int(value.numel() * value.element_size())
+    if isinstance(value, dict):
+        return sum(value_nbytes(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return sum(value_nbytes(item) for item in value)
+    return 0
+
+
+def threads_for_bytes(nbytes, maximum):
+    if maximum <= 1 or nbytes <= 4 * 2**20:
+        return 1
+    if nbytes <= 32 * 2**20:
+        return min(2, maximum)
+    if nbytes <= 256 * 2**20:
+        return min(4, maximum)
+    return maximum
+
+
+def build_thread_plan(cases, maximum):
+    return [dict(case_index=index, input_bytes=value_nbytes(case),
+                 threads=threads_for_bytes(value_nbytes(case), maximum))
+            for index, case in enumerate(cases)]
+
+
+def apply_case_execution(configuration, threads, torch=None):
+    """Apply the same case-specific affinity/thread count to baseline and candidate."""
+    threads = max(1, min(int(threads), int(configuration['threads'])))
+    affinity = list(configuration['affinity'][:threads])
+    os.sched_setaffinity(0, set(affinity))
+    environment = dict(configuration['environment'])
+    environment.update(OMP_NUM_THREADS=str(threads), OMP_THREAD_LIMIT=str(threads),
+                       MKL_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads),
+                       BLIS_NUM_THREADS=str(threads),
+                       OMP_PLACES=','.join('{' + str(cpu) + '}' for cpu in affinity),
+                       ASTRA_CPU_AFFINITY=','.join(map(str, affinity)))
+    os.environ.update(environment)
+    # OpenMP runtimes are often loaded before the per-case environment changes;
+    # set their active team size explicitly when the runtime is available.
+    for library in ('libgomp.so.1', 'libomp.so', 'libiomp5.so'):
+        try:
+            runtime = ctypes.CDLL(library)
+            runtime.omp_set_num_threads.argtypes = [ctypes.c_int]
+            runtime.omp_set_num_threads(threads)
+            break
+        except (OSError, AttributeError):
+            continue
+    if torch is not None:
+        configure_torch_threads(torch, threads)
+    return dict(threads=threads, affinity=affinity, environment=environment)
 
 
 def apply_cpu_execution(configuration, environment=None):

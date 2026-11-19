@@ -101,7 +101,8 @@ Choose between the configured minimum and maximum additional cases (8 to 15 in t
 small/medium cases, signs, zeros and ones, broadcasting/strides and vector tails where legal.
 Use the supplied boundary coverage requirements and declare every input axis variable or fixed from the reference source.
 The maximum case count is a hard budget: combine checks across cases and stop once a valid suite in the range is submitted.
-Compact coverage gaps are diagnostics and may be reported without blocking the frozen suite; full mode is strict.
+Compact coverage may be partial and does not block the frozen suite; do not add repair cases after
+freezing or enumerate untested items. Full mode is strict.
 Follow the configured compact/full coverage profile and strict additional-case cap. In compact mode,
 combine boundary sizes, value patterns and layouts within fifteen cases; do not enumerate every size/layout pair.
 Cover the multi-vector remainder in each legal stride category; a single odd length or a transpose
@@ -110,9 +111,9 @@ Respect the reference source: parameterized layers may constrain channels, norma
 Use the reference model to validate cases through the tool; repair invalid specifications rather than discarding cases.
 During each version's evaluation, call verify_candidate. Do not invent results or generate new tests.
 Review candidate loop bounds, cleanup loops, inactive reduction lanes, M/N/K tile tails and shape/stride
-dispatch paths. Cross-check them against execution.boundary_coverage. Report uncovered branches and
-suspected counterexamples separately from actual pass/fail; tool success does not prove general correctness.
-Never mutate the frozen suite mid-run. Coverage gaps must be recorded for diagnostics or the next experiment.
+dispatch paths. Cross-check them against execution.boundary_coverage. Report suspected counterexamples
+separately from actual pass/fail; tool success does not prove general correctness.
+Never mutate the frozen suite mid-run. Compact coverage status is retained without enumerating gaps.
 The same fixed inputs are sent to the profiling agent after correctness passes; failed candidates are never timed.
 """
 
@@ -143,6 +144,12 @@ def threading_guidance(target, metadata=None):
     if target == "cuda":
         return ""
     threads = (metadata or {}).get("threads", 1)
+    plan = (metadata or {}).get('thread_plan')
+    if plan:
+        return (f"\nCPU execution: automatic per-case thread plan, at most {threads} threads. "
+                "The PyTorch baseline and generated kernel use the same thread count for each case; "
+                "the plan is selected from input bytes and is recorded in execution.thread_plan. "
+                "Use OpenMP/SIMD for sufficiently large cases and avoid assuming every case uses the maximum.\n")
     if threads == 1:
         return "\nCPU execution: exactly one thread. Do not use OpenMP, worker pools or external threaded libraries.\n"
     return (f"\nCPU execution: at most {threads} threads, on the supplied fixed CPU affinity. "

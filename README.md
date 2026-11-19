@@ -67,7 +67,9 @@ must be excluded from CPU manifests. Dynamic AKG tasks use get_inputs_dyn_list.
 Add `--task static_shape/elemwise/elemwise_add_001.py --target neon --prepare-only`
 to an AKG invocation to materialize fixed inputs and reference outputs and measure
 the baseline. This explicitly runs the reference, so only invoke it when desired.
-The default is single-threaded inference (`eval`), five warmups and thirty samples.
+When `--threads` is omitted, CPU inference selects a per-case budget of 1, 2, 4, or the
+automatic maximum from input size; PyTorch and generated kernels use the same budget.
+The default timing protocol uses five warmups and thirty samples.
 Files stay under `optimization_runs/` inside this repository. Stateful/stochastic
 training tasks are outside the initial inference contract. Reference snapshots
 are trusted local PyTorch artifacts and must not be loaded from untrusted sources.
@@ -99,8 +101,9 @@ compile and check saved sources without model calls. Tensor shape, dtype, device
 sequence/dictionary outputs and post-call input mutations are checked. Floating
 outputs use dtype-specific tolerances (overridable with --rtol/--atol); integer and
 boolean results are exact. Matching NaNs are allowed; infinity signs must match.
-Only candidates passing every case are timed. CPU runs use one thread and pin to
-the first allowed logical CPU by default; override it with --cpu-core. Cases are
+Only candidates passing every case are timed. CPU runs automatically select 1, 2, 4,
+or the configured maximum threads per case from input size and pin to the selected
+physical cores; override the maximum/anchor with --threads/--cpu-core. Cases are
 pre-cloned and model state restored before timing. Output allocations and wrapper
 call overhead remain inside the boundary on CPU; CUDA events measure stream time.
 CPU and CUDA numbers are not directly compared to one another.
@@ -114,9 +117,10 @@ layout coverage instead of testing every size/layout combination. The multi-vect
 remainder is required in the union of layouts, and each legal layout must appear at
 least once for every variable axis.
 This reduces sampling coverage; use `--test-coverage full` to restore the full
-boundary/layout grid and an automatic cap of 128 extras. Set `--extra-test-cases`
-and `--max-extra-test-cases` to change the minimum/cap explicitly. An insufficient
-cap produces a coverage error; cases are never silently dropped after freezing.
+boundary/layout grid and an automatic cap of 128 extras. Compact mode permits at
+most 15 extras; `--extra-test-cases` changes the minimum within that cap. Partial
+compact coverage is retained without listing untested items, and cases are never
+silently dropped after freezing.
 Every compiled version is checked by TestingAgent and, on success, measured by
 ProfilingAgent. PlanningAgent uses hardware-specific guidance and actual results
 for the next CodeGenerator attempt. Orchestrator receives progress notifications.
@@ -216,6 +220,5 @@ GPU results are evaluated against their own native references, not each other's 
 Selected Arm Add execution checks have passed, including fixed extra test reuse
 in the related SSH branch. See docs/server-execution.md for this branch's setup
 and validation scope. This does not establish full dataset coverage or CUDA
-execution quality. CPU execution supports a shared thread budget for PyTorch and
-generated OpenMP kernels; performance across thread counts, broader numerical
-coverage and RAG require further evaluation.
+execution quality. CPU execution supports a shared per-case thread plan for PyTorch and
+generated OpenMP kernels; performance across broader numerical coverage and RAG require further evaluation.

@@ -44,8 +44,9 @@ bash run_server.sh --dataset akg --dataset-root benchmarks/akg \
 不通过的版本不计时。编译失败不能进行正确性检查。可用
 `--extra-test-cases` 调整额外数量下限（至少 2），`--max-extra-test-cases` 调整上限，
 或 `--test-spec` 重放包含覆盖声明的已保存规格。只有 1 个原始样例时，每轮共测 9 个。
-`--test-coverage full` 恢复完整覆盖，默认额外样例上限为 128；compact 的默认上限
-为 max(15, extra-test-cases)。显式指定的上限始终生效；测试集冻结后不会追加样例。
+`--test-coverage full` 恢复完整覆盖，默认额外样例上限为 128；compact 硬上限为 15。
+测试集冻结后不会追加样例。
+compact 覆盖不足只保留 partial 状态，不记录具体缺失项。
 
 所有版本仍检查并计时完整固定测试集，但最佳版本排名改为使用生成样例的
 平均加速比，默认几何平均。迭代结束后只对选中的版本进行一次原始样例复测。
@@ -194,7 +195,9 @@ Tensor 类型、元数据查询、数据指针、空输出/工作区分配、只
 换服务器时应重新确认或移除此文件，不复用旧机器型号。服务器 `armv8_sve` 的
 Kunpeng 920 型号来自用户于 2026-11-17 的确认，而不是根据 CPU part 推断。
 
-`--threads` 默认仍为 1；设为 N（N > 1）时，CPU 编译和链接均启用 `-fopenmp`，
+省略 `--threads` 时，框架根据每个样例的输入字节数自动选择 1、2、4 或最大线程数；
+PyTorch baseline、候选 kernel 和 perf 使用同一份 `thread_plan`。显式设置 `--threads N`
+仍可固定最大线程预算。N > 1 时，CPU 编译和链接均启用 `-fopenmp`，
 Coding/Planning Agent 获得对应线程预算，允许生成 OpenMP + NEON/SVE 实现。
 小输入可走串行路径，设置多线程不代表所有输入都必须启动并行区域。
 CUDA 的编译和执行方式保持原有配置。

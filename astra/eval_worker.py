@@ -55,8 +55,11 @@ def main():
                       protocol="alternating_reference_candidate")
         if result["correctness"] == "passed":
             for record, case in zip(result["cases"], reference.cases):
+                plan = meta.get('thread_plan', [])
                 ref_timing, timing = measure_pair(copy.deepcopy(reference.model), copy.deepcopy(candidate),
-                    case, meta["target"], request["warmup"], request["trials"])
+                    case, meta["target"], request["warmup"], request["trials"],
+                    execution=meta.get('cpu_execution'),
+                    case_threads=plan[record['case_id']]['threads'] if plan else None)
                 result["baseline"].append(ref_timing)
                 record["benchmark"] = timing
                 record["reference_speedup"] = ref_timing["median_ms"] / timing["median_ms"]

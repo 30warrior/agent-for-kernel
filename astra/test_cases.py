@@ -50,9 +50,10 @@ restrictions in reason. A layout structurally impossible with the input descript
 may also be exempted with that specific reason. Never exempt a representable legal layout or mark
 resizable axes fixed to avoid testing.
 When no SVE VL is readable, supplied generic sizes are diagnostic coverage, not an assumed hardware VL.
-The tool checks actual shapes and strides and returns missing coverage for you to repair BEFORE freezing.
-This samples vector and common unroll boundaries when possible; compact coverage may be partial
-under the fixed case cap and does not prove arbitrary candidate tile/loop coverage.
+The tool checks actual shapes and strides before freezing. This samples vector and common unroll
+boundaries when possible; compact coverage may be partial under the fixed case cap and does not
+prove arbitrary candidate tile/loop coverage. Compact mode reports only partial status, not a list
+of untested items.
 """
 
 
@@ -92,7 +93,7 @@ def validate_spec(spec, count, maximum=15):
 def suite_limits(settings):
     maximum = getattr(settings, 'max_extra_test_cases', None)
     if maximum is None:
-        maximum = 128 if getattr(settings, 'test_coverage', 'compact') == 'full' else max(15, settings.extra_test_cases)
+        maximum = 128 if getattr(settings, 'test_coverage', 'compact') == 'full' else 15
     return settings.extra_test_cases, maximum
 
 
@@ -209,8 +210,13 @@ def freeze_suite(reference, spec, folder, settings):
                          reference.mutated_inputs + mutations, metadata)
     combined.metadata["cases"] = [describe(case) for case in combined.cases]
     combined.metadata["outputs"] = [describe(output) for output in combined.expected]
-    baseline = [measure(combined.model, case, settings.target, settings.warmup, settings.trials)
-                for case in combined.cases]
+    if settings.target != 'cuda' and metadata.get('cpu_execution'):
+        from .cpu_execution import build_thread_plan
+        metadata['thread_plan'] = build_thread_plan(combined.cases, metadata['cpu_execution']['threads'])
+    baseline = [measure(combined.model, case, settings.target, settings.warmup, settings.trials,
+                        execution=metadata.get('cpu_execution'),
+                        case_threads=metadata.get('thread_plan', [])[index]['threads'] if metadata.get('thread_plan') else None)
+                for index, case in enumerate(combined.cases)]
     save_reference(combined, folder)
     atomic_write(folder / "baseline.json", json.dumps(baseline, indent=2))
     atomic_write(frozen, json.dumps(dict(spec=spec, suite_id=metadata["suite_id"],
