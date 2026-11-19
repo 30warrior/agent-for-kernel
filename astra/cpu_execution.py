@@ -90,8 +90,7 @@ def select_cpu_execution(threads=None, cpu_core=None, cpu_cores=None):
         policy = "auto_physical_same_numa"
     topology = [cpu_topology(cpu) for cpu in selected]
     environment = dict(OMP_NUM_THREADS=str(threads), OMP_THREAD_LIMIT=str(threads),
-        OMP_DYNAMIC="FALSE", OMP_MAX_ACTIVE_LEVELS="1", OMP_PROC_BIND="close",
-        OMP_PLACES=",".join("{" + str(cpu) + "}" for cpu in selected),
+        OMP_DYNAMIC="FALSE", OMP_MAX_ACTIVE_LEVELS="1", OMP_PROC_BIND="FALSE",
         MKL_NUM_THREADS=str(threads), MKL_DYNAMIC="FALSE", OPENBLAS_NUM_THREADS=str(threads),
         BLIS_NUM_THREADS=str(threads), ASTRA_CPU_AFFINITY=",".join(map(str, selected)))
     return dict(threads=threads, affinity=selected, affinity_policy=policy, topology=topology,
@@ -130,13 +129,14 @@ def apply_case_execution(configuration, threads, torch=None):
     """Apply the same case-specific affinity/thread count to baseline and candidate."""
     threads = max(1, min(int(threads), int(configuration['threads'])))
     affinity = list(configuration['affinity'][:threads])
-    os.sched_setaffinity(0, set(affinity))
+    bind_cpu_threads(affinity)
     environment = dict(configuration['environment'])
+    environment.pop('OMP_PLACES', None)
     environment.update(OMP_NUM_THREADS=str(threads), OMP_THREAD_LIMIT=str(threads),
                        MKL_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads),
-                       BLIS_NUM_THREADS=str(threads),
-                       OMP_PLACES=','.join('{' + str(cpu) + '}' for cpu in affinity),
+                       BLIS_NUM_THREADS=str(threads), OMP_PROC_BIND='FALSE',
                        ASTRA_CPU_AFFINITY=','.join(map(str, affinity)))
+    os.environ.pop('OMP_PLACES', None)
     os.environ.update(environment)
     # OpenMP runtimes are often loaded before the per-case environment changes;
     # set their active team size explicitly when the runtime is available.
@@ -150,19 +150,36 @@ def apply_case_execution(configuration, threads, torch=None):
             continue
     if torch is not None:
         configure_torch_threads(torch, threads)
+    bind_cpu_threads(affinity)
     return dict(threads=threads, affinity=affinity, environment=environment)
+
+
+def bind_cpu_threads(affinity):
+    """Bind existing workers too; future threads inherit their creator's mask.
+
+    Explicit OS affinity avoids runtime-specific OMP_PLACES CPU-number limits
+    and stale worker masks when successive cases grow/shrink their thread team.
+    """
+    requested = set(affinity)
+    os.sched_setaffinity(0, requested)
+    for task in Path('/proc/self/task').iterdir():
+        try:
+            os.sched_setaffinity(int(task.name), requested)
+        except ProcessLookupError:
+            pass  # A worker can exit while enumerating the process's threads.
 
 
 def apply_cpu_execution(configuration, environment=None):
     """Apply before importing torch/OpenMP; a worker may inherit a master bound to one CPU."""
     env = os.environ if environment is None else environment
     # Avoid inherited runtime-specific bindings overriding the explicit common places.
-    for name in ("GOMP_CPU_AFFINITY", "KMP_AFFINITY", "KMP_HW_SUBSET", "OMP_NESTED"):
+    for name in ("GOMP_CPU_AFFINITY", "KMP_AFFINITY", "KMP_HW_SUBSET", "OMP_NESTED", "OMP_PLACES"):
         env.pop(name, None)
-    env.update(configuration["environment"])
+    env.update({name: value for name, value in configuration['environment'].items() if name != 'OMP_PLACES'})
+    env['OMP_PROC_BIND'] = 'FALSE'
     if environment is None:
         requested = set(configuration["affinity"])
-        os.sched_setaffinity(0, requested)
+        bind_cpu_threads(requested)
         if set(os.sched_getaffinity(0)) != requested:
             raise RuntimeError("Could not apply the complete saved CPU affinity")
 
@@ -178,7 +195,7 @@ def restore_cpu_affinity():
     value = os.environ.get("ASTRA_CPU_AFFINITY")
     if value:
         requested = set(parse_cpu_list(value))
-        os.sched_setaffinity(0, requested)
+        bind_cpu_threads(requested)
         if set(os.sched_getaffinity(0)) != requested:
             raise RuntimeError("Could not restore the complete CPU affinity before loading an extension")
 
