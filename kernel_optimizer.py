@@ -44,8 +44,8 @@ def build_parser():
     parser.add_argument("--perf-repeats", type=int, default=64)
     parser.add_argument("--perf-batch-mib", type=float, default=64,
                         help="Approximate prepared input/state/output memory budget for perf batches")
-    parser.add_argument("--extra-test-cases", type=int, default=8,
-                        help="Minimum additional cases (default: 8; compact mode allows up to 15)")
+    parser.add_argument("--extra-test-cases", type=int, default=15,
+                        help="Additional cases: compact mode requires exactly 15")
     parser.add_argument("--max-extra-test-cases", type=int,
                         help="Additional-case cap (default: 15 in compact mode; 128 in full mode)")
     parser.add_argument('--test-coverage', choices=('compact', 'full'), default='compact',
@@ -66,10 +66,10 @@ def execute_task(args, parser):
         parser.error("perf-repeats and perf-batch-mib must be positive and finite")
     if args.extra_test_cases < 2 or not math.isfinite(args.test_suite_max_mib) or args.test_suite_max_mib <= 0:
         parser.error("extra-test-cases must be at least two and test-suite-max-mib must be positive and finite")
-    if args.test_coverage == 'compact' and args.extra_test_cases > 15:
-        parser.error('compact coverage allows at most 15 additional test cases')
-    if args.test_coverage == 'compact' and args.max_extra_test_cases is not None and args.max_extra_test_cases > 15:
-        parser.error('compact coverage allows at most 15 additional test cases')
+    if args.test_coverage == 'compact' and args.extra_test_cases != 15:
+        parser.error('compact coverage requires exactly 15 additional test cases')
+    if args.test_coverage == 'compact' and args.max_extra_test_cases not in (None, 15):
+        parser.error('compact coverage requires exactly 15 additional test cases')
     if args.max_extra_test_cases is None:
         args.max_extra_test_cases = 128 if args.test_coverage == 'full' else 15
     if args.max_extra_test_cases < args.extra_test_cases:

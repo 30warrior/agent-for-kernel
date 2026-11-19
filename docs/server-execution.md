@@ -39,11 +39,11 @@ bash run_server.sh --dataset akg --dataset-root benchmarks/akg \
 运行时向量长度，不得假定 SVE2、SME 或编译器未提供的桥接 intrinsics 可用。
 每个目标只加载自己的 Markdown 文件；修改后在下一次启动时生效。
 
-默认采用 compact 覆盖，TestingAgent 一次生成 8–15 个额外样例，先全部在参考模型上验证，再冻结为
+默认采用 compact 覆盖，TestingAgent 一次生成恰好 15 个额外样例，先全部在参考模型上验证，再冻结为
 `test_suite.json` 和 `reference.pt`。所有版本复用同一组原始及额外样例；正确性
 不通过的版本不计时。编译失败不能进行正确性检查。可用
-`--extra-test-cases` 调整额外数量下限（至少 2），`--max-extra-test-cases` 调整上限，
-或 `--test-spec` 重放包含覆盖声明的已保存规格。只有 1 个原始样例时，每轮共测 9 个。
+`--test-spec` 重放恰好包含 15 个额外样例及覆盖声明的已保存规格。
+只有 1 个原始样例时，每轮共测 16 个。compact 模式不允许改成 8–15 个范围。
 `--test-coverage full` 恢复完整覆盖，默认额外样例上限为 128；compact 硬上限为 15。
 测试集冻结后不会追加样例。
 compact 覆盖不足只保留 partial 状态，不记录具体缺失项。
@@ -195,8 +195,10 @@ Tensor 类型、元数据查询、数据指针、空输出/工作区分配、只
 换服务器时应重新确认或移除此文件，不复用旧机器型号。服务器 `armv8_sve` 的
 Kunpeng 920 型号来自用户于 2026-11-17 的确认，而不是根据 CPU part 推断。
 
-省略 `--threads` 时，框架根据每个样例的输入字节数自动选择 2、4、8、16 或最大线程数；
+省略 `--threads` 时，框架根据每个样例的输入字节数自动选择 2、4、6……32 个线程；
 自动线程数均为 2 的倍数，最大为 32，且只从同一 NUMA 节点选择物理核心；
+当前大小启发式为每 16 MiB 输入使用一对线程，向上取整并受节点核心数及上限约束；
+这不是每个算子的最优线程数搜索结果。数据和线程计划在迭代开始前固定。
 PyTorch baseline、候选 kernel 和 perf 使用同一份 `thread_plan`。显式设置 `--threads N`
 仍可固定最大线程预算。N > 1 时，CPU 编译和链接均启用 `-fopenmp`，
 Coding/Planning Agent 获得对应线程预算，允许生成 OpenMP + NEON/SVE 实现。

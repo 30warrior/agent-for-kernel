@@ -23,10 +23,10 @@ Cover mixed signs and tails only where the reference contract permits them. Do n
 All proposed cases must run successfully on the reference model before freezing. Invalid cases return errors for repair.
 The suite is generated ONCE before candidate evaluation; never add/remove cases in response to candidate failures.
 Only propose additional input tensors within the supplied total byte budget; the original dataset is retained unchanged.
-The case count must be between minimum_additional_cases and maximum_additional_cases.
-For the default compact run this is 8 to 15 additional cases. Once a valid reference
-suite in this range is materialized, it is frozen. Partial compact coverage is retained
-as a diagnostic and does not trigger an endless repair loop. Only full coverage mode rejects
+In compact mode submit exactly 15 additional cases, even when boundary/layout coverage is partial.
+Once a valid reference suite of exactly 15 cases is materialized, it is frozen. Partial compact
+coverage does not trigger a repair loop or a missing-items report. Full mode follows the supplied
+minimum_additional_cases and maximum_additional_cases and rejects
 missing boundary/layout coverage.
 coverage must declare EVERY axis listed in coverage_requirements.axes, using the input's FINAL axes AFTER transpose:
 {"base_case":0,"input":0,"axis":1,"kind":"variable","reason":"Source reduces this resizable dimension"}.
@@ -39,7 +39,7 @@ For a middle reduction axis, transpose to make that
 axis unit-stride, not just an unrelated axis. Use small other dimensions and preserve coupled dimensions.
 Strided coverage at length 1 is not required: singleton axes have no stride-dependent traversal.
 One case may cover multiple axes/layouts. Reuse cases across inputs/axes and combine value variation
-with shape/layout checks. Obey the case cap: compact mode defaults to at least eight and at most fifteen additional cases.
+with shape/layout checks. Compact mode requires exactly fifteen additional cases.
 Where the budget permits, reserve one case with original input shapes and varied nonzero values
 so generated-case performance selection also samples the original workload scale.
 Nonzero-capable distributions must supply boundary coverage; zero-only cases do not count.
@@ -91,6 +91,8 @@ def validate_spec(spec, count, maximum=15):
 
 
 def suite_limits(settings):
+    if getattr(settings, 'test_coverage', 'compact') == 'compact':
+        return 15, 15
     maximum = getattr(settings, 'max_extra_test_cases', None)
     if maximum is None:
         maximum = 128 if getattr(settings, 'test_coverage', 'compact') == 'full' else 15
@@ -184,6 +186,10 @@ def freeze_suite(reference, spec, folder, settings):
             random.seed(case["seed"])
             torch.manual_seed(case["seed"])
             inputs = type(base)(build_input(value, desc, remaining) for value, desc in zip(base, case["inputs"]))
+            if settings.target != 'cuda' and reference.metadata.get('cpu_execution'):
+                from .cpu_execution import apply_case_execution, build_thread_plan
+                execution = reference.metadata['cpu_execution']
+                apply_case_execution(execution, build_thread_plan([inputs], execution['threads'])[0]['threads'], torch)
             working = clone_inputs(inputs)
             with torch.inference_mode():
                 output = copy.deepcopy(reference.model)(*working)
@@ -254,7 +260,7 @@ def generate_suite(task, reference, folder, settings, llm, materialize):
     instructions = TESTER + "\n" + SPEC_GUIDE
     prompt = dict(action="generate_and_freeze_test_suite", task=public_metadata(task.metadata()),
                   reference_source=task.source, execution=execution_context(reference.metadata, settings),
-                  minimum_additional_cases=settings.extra_test_cases,
+                  minimum_additional_cases=suite_limits(settings)[0],
                   maximum_additional_cases=suite_limits(settings)[1],
                   coverage_requirements=coverage_requirements(reference.metadata, getattr(settings, 'test_coverage', 'compact')),
                   total_additional_input_bytes_limit=int(settings.test_suite_max_mib * 2**20))

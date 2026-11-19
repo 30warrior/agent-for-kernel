@@ -102,9 +102,9 @@ compile and check saved sources without model calls. Tensor shape, dtype, device
 sequence/dictionary outputs and post-call input mutations are checked. Floating
 outputs use dtype-specific tolerances (overridable with --rtol/--atol); integer and
 boolean results are exact. Matching NaNs are allowed; infinity signs must match.
-Only candidates passing every case are timed. CPU runs automatically select 1, 2, 4,
-or the configured maximum threads per case from input size and pin to the selected
-physical cores; override the maximum/anchor with --threads/--cpu-core. Cases are
+Only candidates passing every case are timed. CPU runs automatically select even
+thread counts from 2 through 32 from input size and pin to physical cores in one
+NUMA node; override the maximum/anchor with --threads/--cpu-core. Cases are
 pre-cloned and model state restored before timing. Output allocations and wrapper
 call overhead remain inside the boundary on CPU; CUDA events measure stream time.
 CPU and CUDA numbers are not directly compared to one another.
@@ -112,14 +112,14 @@ CPU and CUDA numbers are not directly compared to one another.
 ## Shared refinement workflow
 
 Without an *-only switch, TestingAgent generates and freezes extra cases once.
-The default compact suite contains between eight and fifteen extra cases plus every original
-dataset case (9–16 total for a task with one original case). Boundary sizes share
+The default compact suite contains exactly fifteen extra cases plus every original
+dataset case (16 total for a task with one original case). Boundary sizes share
 layout coverage instead of testing every size/layout combination. The multi-vector
 remainder is required in the union of layouts, and each legal layout must appear at
 least once for every variable axis.
 This reduces sampling coverage; use `--test-coverage full` to restore the full
-boundary/layout grid and an automatic cap of 128 extras. Compact mode permits at
-most 15 extras; `--extra-test-cases` changes the minimum within that cap. Partial
+boundary/layout grid and an automatic cap of 128 extras. Compact mode requires
+exactly 15 extras, including when replaying a test specification. Partial
 compact coverage is retained without listing untested items, and cases are never
 silently dropped after freezing.
 Every compiled version is checked by TestingAgent and, on success, measured by

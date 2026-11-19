@@ -77,9 +77,8 @@ Boundary and layout correctness requirements for every generated/refined kernel:
 - Planning must audit each proposed transformation and previous source's loop bounds,
   index updates, remainder loops and layout branches before proposing performance changes.
   Fixed-suite success is evidence only for those inputs, not proof of all paths.
-  Report suspected coverage gaps with exact shapes/strides and an explanation. Do not
-  change the frozen suite or invent test outcomes; new gaps require a separate diagnostic
-  or a subsequent experiment with a new suite replayed consistently across versions.
+  Audit these paths while implementing the kernel, but do not enumerate compact-suite
+  coverage gaps or change the frozen suite. Never invent test outcomes.
 """
 
 TARGET_GUIDANCE = {
@@ -97,10 +96,10 @@ TESTER = """You handle test case generation and correctness verification with un
 Generate the extra test suite ONCE, before candidate evaluation, and reuse it for ALL versions.
 Keep every original dataset case. Never change model initialization, weights, task semantics or the frozen suite.
 When generating tests, call generate_comprehensive_test_cases with a complete JSON specification.
-Choose between the configured minimum and maximum additional cases (8 to 15 in the default run), mixing practical
+Generate exactly 15 additional cases in compact mode; in full mode follow the configured range. Mix practical
 small/medium cases, signs, zeros and ones, broadcasting/strides and vector tails where legal.
 Use the supplied boundary coverage requirements and declare every input axis variable or fixed from the reference source.
-The maximum case count is a hard budget: combine checks across cases and stop once a valid suite in the range is submitted.
+The case count is a hard budget: combine checks across cases and stop after the fixed-size suite is submitted.
 Compact coverage may be partial and does not block the frozen suite; do not add repair cases after
 freezing or enumerate untested items. Full mode is strict.
 Follow the configured compact/full coverage profile and strict additional-case cap. In compact mode,
@@ -150,7 +149,8 @@ def threading_guidance(target, metadata=None):
                 "The PyTorch baseline and generated kernel use the same thread count for each case; "
                 "the plan is selected from input bytes and is recorded in execution.thread_plan. "
                 "All selected workers stay on one NUMA node. Use OpenMP/SIMD for sufficiently large cases "
-                "and avoid assuming every case uses the maximum.\n")
+                "and avoid assuming every case uses the maximum. Respect the runtime's per-case team size: "
+                "do not hard-code num_threads, change OpenMP settings, create other pools or alter binding.\n")
     if threads == 1:
         return "\nCPU execution: exactly one thread. Do not use OpenMP, worker pools or external threaded libraries.\n"
     return (f"\nCPU execution: at most {threads} threads, on the supplied fixed CPU affinity. "

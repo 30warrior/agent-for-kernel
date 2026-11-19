@@ -54,40 +54,39 @@ def select_cpu_execution(threads=None, cpu_core=None, cpu_cores=None):
         if not set(selected) <= allowed:
             raise ValueError("--cpu-cores contains CPUs outside this process's allowed affinity")
         topology = [cpu_topology(cpu) for cpu in selected]
-        numa_nodes = {info["numa_node"] for info in topology if info["numa_node"] is not None}
-        if len(numa_nodes) > 1:
-            raise ValueError("--cpu-cores must stay within one NUMA node")
+        numa_nodes = {info["numa_node"] for info in topology}
+        if None in numa_nodes or len(numa_nodes) != 1:
+            raise ValueError("--cpu-cores must belong to one identifiable NUMA node")
+        if threads < 2 or threads > 32 or threads % 2:
+            raise ValueError("CPU thread budget must be an even number between 2 and 32")
         policy = "explicit"
     else:
-        if threads is None:
-            # Keep automatic runs on one NUMA node and cap them at 32 even
-            # when the host exposes more physical cores.
-            available = len({(cpu_topology(cpu)["package"], cpu_topology(cpu)["core"]) for cpu in allowed})
-            threads = min(32, available)
-            threads -= threads % 2
-            if threads < 2:
-                raise ValueError("Automatic CPU execution requires at least two physical cores")
         anchor = min(allowed) if cpu_core is None else cpu_core
         if anchor not in allowed:
             raise ValueError("--cpu-core is outside this process's allowed affinity")
         topology = {cpu: cpu_topology(cpu) for cpu in allowed}
         base = topology[anchor]
+        if base['numa_node'] is None:
+            raise ValueError("Cannot identify the selected CPU's NUMA node")
         selected, seen = [], set()
         for cpu in [anchor] + sorted(allowed - {anchor}):
             info = topology[cpu]
             if info["numa_node"] != base["numa_node"]:
                 continue
-            if base["numa_node"] is None and info["package"] != base["package"]:
-                continue
             key = (info["package"], info["core"]) if info["core"] is not None else ("cpu", cpu)
             if key not in seen:
                 selected.append(cpu)
                 seen.add(key)
-            if len(selected) == threads:
-                break
-        if len(selected) != threads:
+        if threads is None:
+            # Count only physical cores in the anchor's NUMA node, not the host.
+            threads = min(32, len(selected))
+            threads -= threads % 2
+            if threads < 2:
+                raise ValueError("Selected NUMA node needs at least two available physical cores")
+        if len(selected) < threads:
             raise ValueError(f"Requested {threads} threads, but only {len(selected)} distinct physical cores "
                              "are available in the selected NUMA node/package. Use fewer threads or explicit --cpu-cores.")
+        selected = selected[:threads]
         policy = "auto_physical_same_numa"
     topology = [cpu_topology(cpu) for cpu in selected]
     environment = dict(OMP_NUM_THREADS=str(threads), OMP_THREAD_LIMIT=str(threads),
@@ -112,17 +111,13 @@ def value_nbytes(value):
 
 
 def threads_for_bytes(nbytes, maximum):
-    if maximum < 2 or maximum % 2:
-        raise ValueError("Automatic CPU thread maximum must be an even number of at least two")
-    if nbytes <= 4 * 2**20:
-        return 2
-    if nbytes <= 32 * 2**20:
-        return min(4, maximum)
-    if nbytes <= 128 * 2**20:
-        return min(8, maximum)
-    if nbytes <= 512 * 2**20:
-        return min(16, maximum)
-    return maximum
+    if maximum < 2 or maximum > 32 or maximum % 2:
+        raise ValueError("Automatic CPU thread maximum must be even and between 2 and 32")
+    # One pair per 16 MiB of inputs, rounded up. This deterministic sizing
+    # heuristic permits every even count and is frozen with the cases; it is
+    # not a measurement of the optimal thread count for an operator.
+    pair_bytes = 16 * 2**20
+    return min(maximum, max(2, 2 * ((nbytes + pair_bytes - 1) // pair_bytes)))
 
 
 def build_thread_plan(cases, maximum):
