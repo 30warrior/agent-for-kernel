@@ -44,10 +44,10 @@ def build_parser():
     parser.add_argument("--perf-repeats", type=int, default=64)
     parser.add_argument("--perf-batch-mib", type=float, default=64,
                         help="Approximate prepared input/state/output memory budget for perf batches")
-    parser.add_argument("--extra-test-cases", type=int, default=15,
-                        help="Minimum additional cases (default: 15; compact mode uses exactly 15 by default)")
+    parser.add_argument("--extra-test-cases", type=int, default=8,
+                        help="Minimum additional cases (default: 8; compact mode allows up to 15)")
     parser.add_argument("--max-extra-test-cases", type=int,
-                        help="Additional-case cap (default: max(15, minimum) in compact mode; 128 in full mode)")
+                        help="Additional-case cap (default: 15 in compact mode; 128 in full mode)")
     parser.add_argument('--test-coverage', choices=('compact', 'full'), default='compact',
                         help='Compact boundary/layout coverage by default; full tests every boundary in every layout')
     parser.add_argument("--test-suite-max-mib", type=float, default=512,

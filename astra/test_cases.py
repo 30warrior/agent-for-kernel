@@ -23,9 +23,9 @@ Cover mixed signs and tails only where the reference contract permits them. Do n
 All proposed cases must run successfully on the reference model before freezing. Invalid cases return errors for repair.
 The suite is generated ONCE before candidate evaluation; never add/remove cases in response to candidate failures.
 Only propose additional input tensors within the supplied total byte budget; the original dataset is retained unchanged.
-The case count must be exactly minimum_additional_cases and must not exceed maximum_additional_cases.
-For the default compact run this is exactly 15 additional cases. Submit the fixed-size
-specification even when the compact coverage report says partial; partial coverage is retained
+The case count must be between minimum_additional_cases and maximum_additional_cases.
+For the default compact run this is 8 to 15 additional cases. Once a valid reference
+suite in this range is materialized, it is frozen. Partial compact coverage is retained
 as a diagnostic and does not trigger an endless repair loop. Only full coverage mode rejects
 missing boundary/layout coverage.
 coverage must declare EVERY axis listed in coverage_requirements.axes, using the input's FINAL axes AFTER transpose:
@@ -39,7 +39,7 @@ For a middle reduction axis, transpose to make that
 axis unit-stride, not just an unrelated axis. Use small other dimensions and preserve coupled dimensions.
 Strided coverage at length 1 is not required: singleton axes have no stride-dependent traversal.
 One case may cover multiple axes/layouts. Reuse cases across inputs/axes and combine value variation
-with shape/layout checks. Obey the case cap: compact mode defaults to exactly fifteen additional cases.
+with shape/layout checks. Obey the case cap: compact mode defaults to at least eight and at most fifteen additional cases.
 Where the budget permits, reserve one case with original input shapes and varied nonzero values
 so generated-case performance selection also samples the original workload scale.
 Nonzero-capable distributions must supply boundary coverage; zero-only cases do not count.
@@ -62,10 +62,8 @@ def validate_spec(spec, count, maximum=15):
     cases = spec["cases"]
     if not isinstance(cases, list):
         raise ValueError('cases must be a list')
-    if len(cases) != count:
-        raise ValueError(f"Expected exactly {count} additional test cases")
-    if len(cases) > maximum:
-        raise ValueError(f"Expected no more than {maximum} additional test cases")
+    if len(cases) < count or len(cases) > maximum:
+        raise ValueError(f"Expected {count} to {maximum} additional test cases")
     if not isinstance(spec['coverage'], list):
         raise ValueError('coverage must be a list of axis declarations')
     names, signatures = set(), set()
