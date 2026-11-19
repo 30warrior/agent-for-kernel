@@ -111,6 +111,9 @@ def execute_task(args, parser):
     from astra.timing import measure
     task = load_task(args.dataset, args.dataset_root, args.task)
     effective_threads = cpu_execution['threads'] if cpu_execution else (args.threads or 1)
+    # Workflow and worker settings must see the resolved maximum, not the
+    # omitted CLI value; otherwise Backend would compare None with an integer.
+    args.threads = effective_threads
     backend = Backend(args.target, args.compile_timeout, threads=effective_threads)
     hardware = backend.capabilities()
     reference = prepare_reference(task, args.target, args.seed, effective_threads, cpu_execution=cpu_execution)
