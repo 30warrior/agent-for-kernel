@@ -14,6 +14,11 @@ Tensor descriptor: {"kind":"tensor", "shape":[2,33], "distribution":"normal", "m
 Other distributions: uniform (low/high), randint (integer low/high, high exclusive), zeros, ones.
 Use randint low=0 high=2 for bool masks. Dtype and device stay the same as the base input.
 Optional transpose:[axis1,axis2] is applied AFTER allocating shape; use it for legal noncontiguous cases.
+The descriptor shape is the PRE-transpose shape. Before the reference model is called, the tool
+computes the FINAL shape after transpose and rejects malformed axes or fixed-axis size changes.
+For example, shape [8192,12] with transpose [0,1] produces final shape [12,8192].
+This is a generic structural check; the reference model remains the authority for operator-specific
+contracts such as normalized dimensions, channel counts and reduction legality.
 Copy descriptor: {"kind":"copy"} clones the original argument, including nested structures.
 Scalar descriptor: {"kind":"scalar", "value":1.0} preserves the original Python scalar type.
 Do not change model weights, constructor arguments, computation semantics or original dataset cases.
@@ -151,6 +156,73 @@ def build_input(base, descriptor, remaining):
     return tensor
 
 
+def _preflight_descriptor(base, descriptor, path, fixed_axes):
+    """Check descriptor structure and final shape without allocating or invoking the model."""
+    if not isinstance(descriptor, dict):
+        raise ValueError(f"{path}: input descriptor must be an object")
+    kind = descriptor.get("kind")
+    if kind == "copy":
+        if set(descriptor) != {"kind"}:
+            raise ValueError(f"{path}: copy accepts only kind")
+        return
+    if kind == "scalar":
+        if set(descriptor) != {"kind", "value"} or type(descriptor.get("value")) is not type(base):
+            raise ValueError(f"{path}: scalar descriptor must preserve the original scalar type")
+        if not isinstance(base, (int, float, bool, str)):
+            raise ValueError(f"{path}: unsupported scalar input")
+        return
+
+    allowed = {"kind", "shape", "distribution", "low", "high", "mean", "std", "transpose"}
+    if kind != "tensor" or not hasattr(base, "shape") or not hasattr(base, "dtype"):
+        raise ValueError(f"{path}: invalid tensor descriptor or argument type")
+    if set(descriptor) - allowed:
+        raise ValueError(f"{path}: unknown tensor descriptor field")
+    shape = descriptor.get("shape")
+    if not isinstance(shape, list) or len(shape) > 16 or any(type(n) is not int or n < 0 for n in shape):
+        raise ValueError(f"{path}: shape must be a list of nonnegative integers")
+    axes = descriptor.get("transpose")
+    final_shape = list(shape)
+    if axes is not None:
+        if not isinstance(axes, list) or len(axes) != 2 or any(type(n) is not int for n in axes):
+            raise ValueError(f"{path}: transpose must contain two axes")
+        if axes[0] == axes[1] or any(axis < 0 or axis >= len(shape) for axis in axes):
+            raise ValueError(f"{path}: transpose axes must be distinct and within the pre-transpose rank")
+        final_shape[axes[0]], final_shape[axes[1]] = final_shape[axes[1]], final_shape[axes[0]]
+    for axis in fixed_axes:
+        if axis < 0 or axis >= len(final_shape):
+            raise ValueError(f"{path}: fixed coverage axis {axis} is outside final rank {len(final_shape)}")
+        original_shape = list(base.shape)
+        if axis >= len(original_shape) or final_shape[axis] != original_shape[axis]:
+            raise ValueError(
+                f"{path}: final shape {final_shape} changes fixed axis {axis}; "
+                "choose a pre-transpose shape that preserves the reference contract"
+            )
+
+
+def preflight_spec(reference, spec):
+    """Validate all descriptors before any generated input reaches the reference model."""
+    original_count = len(reference.cases)
+    fixed_axes = {}
+    for declaration in spec.get("coverage", []):
+        if not isinstance(declaration, dict) or declaration.get("kind") != "fixed":
+            continue
+        selectors = tuple(declaration.get(key) for key in ("base_case", "input", "axis"))
+        if all(type(value) is int for value in selectors):
+            fixed_axes.setdefault(selectors[:2], set()).add(selectors[2])
+    for index, case in enumerate(spec["cases"]):
+        base_case = case["base_case"]
+        if base_case >= original_count:
+            raise ValueError(f"Generated case {index}: base_case is outside original dataset cases")
+        base = reference.cases[base_case]
+        if len(case["inputs"]) != len(base):
+            raise ValueError(f"Generated case {index}: wrong number of positional input descriptors")
+        if all(isinstance(item, dict) and item.get("kind") == "copy" for item in case["inputs"]):
+            raise ValueError(f"Generated case {index}: a generated case must vary at least one argument")
+        for input_index, (value, descriptor) in enumerate(zip(base, case["inputs"])):
+            _preflight_descriptor(value, descriptor, f"case {index} input {input_index}",
+                                  fixed_axes.get((base_case, input_index), set()))
+
+
 def freeze_suite(reference, spec, folder, settings):
     """Commit only after every proposed case validates and all baselines measure."""
     import torch
@@ -164,6 +236,9 @@ def freeze_suite(reference, spec, folder, settings):
         raise RuntimeError("Test suite is frozen; it cannot be regenerated during iterations")
     if reference.metadata.get("suite_id"):
         raise RuntimeError("Reference already contains a frozen suite")
+    # Reject malformed descriptors and impossible fixed-axis layouts before any
+    # generated input reaches the reference model.
+    preflight_spec(reference, spec)
     original_count = len(reference.cases)
     cases, expected, mutations, labels = [], [], [], []
     remaining = [int(settings.test_suite_max_mib * 2**20)]
