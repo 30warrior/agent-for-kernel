@@ -10,13 +10,13 @@ import random
 SPEC_GUIDE = """Submit JSON with cases and coverage lists through generate_comprehensive_test_cases(test_spec).
 Each case: {"name":"unique name", "base_case":0, "seed":43, "inputs":[...]}.
 base_case indexes the ORIGINAL dataset cases. inputs describes ALL positional arguments.
-Tensor descriptor: {"kind":"tensor", "shape":[2,33], "distribution":"normal", "mean":0.0, "std":1.0}.
+Tensor descriptor: {"kind":"tensor", "shape":<pre-transpose integer list>, "distribution":"normal", "mean":0.0, "std":1.0}.
 Other distributions: uniform (low/high), randint (integer low/high, high exclusive), zeros, ones.
 Use randint low=0 high=2 for bool masks. Dtype and device stay the same as the base input.
 Optional transpose:[axis1,axis2] is applied AFTER allocating shape; use it for legal noncontiguous cases.
 The descriptor shape is the PRE-transpose shape. Before the reference model is called, the tool
 computes the FINAL shape after transpose and rejects malformed axes or fixed-axis size changes.
-For example, shape [8192,12] with transpose [0,1] produces final shape [12,8192].
+For example, a pre-transpose shape [a,b] with transpose [0,1] produces final shape [b,a].
 This is a generic structural check; the reference model remains the authority for operator-specific
 contracts such as normalized dimensions, channel counts and reduction legality.
 Copy descriptor: {"kind":"copy"} clones the original argument, including nested structures.
