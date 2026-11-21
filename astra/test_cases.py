@@ -35,6 +35,11 @@ For tasks with very large original tensors, do not duplicate the original full s
 use smaller legal batch or spatial dimensions for most cases while preserving constructor-fixed and
 reduction dimensions, and include at most one original-scale case when representative performance is needed.
 Every generated case must remain practical to materialize, benchmark and profile independently.
+Across the fixed fifteen cases, include legal small, medium and large workloads. For every resizable
+axis where the reference contract permits it, include at least one length that is not divisible by four
+and one multi-vector tail length (for example a vector-boundary neighbor); use the FINAL axis length
+after transpose. If an axis is fixed or cannot realize such a length, declare that source-based reason
+in coverage rather than changing the contract.
 Submit exactly 15 additional cases, even when boundary/layout coverage is partial.
 Once a valid reference suite of exactly 15 cases is materialized, it is frozen.
 Partial coverage does not trigger a repair loop or a missing-items report, under either profile.

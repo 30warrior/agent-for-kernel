@@ -101,7 +101,11 @@ small/medium cases, signs, zeros and ones, broadcasting/strides and vector tails
 For tasks with very large original tensors, use smaller legal batch or spatial dimensions for most
 cases and preserve only the dimensions fixed by the constructor or operator contract. Include at most
 one original-scale case for representative performance; do not duplicate a huge original tensor across
-the suite. Each case must be practical to materialize, benchmark and profile independently.
+the suite. Across the fifteen cases, include small, medium and large legal workloads, plus at least one
+legal length not divisible by four on each resizable axis where possible. Include a multi-vector SVE
+tail neighbor (such as VL-1 or VL+1 when the supplied boundary requirements permit it) and exercise
+the final cleanup path after transpose and stride changes. Each case must be practical to materialize,
+benchmark and profile independently.
 Use the supplied boundary coverage requirements and declare every input axis variable or fixed from the reference source.
 The case count is a hard budget: combine checks across cases and stop after the fixed-size suite is submitted.
 Coverage may be partial and does not block the frozen suite; do not add repair cases after

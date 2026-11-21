@@ -35,6 +35,8 @@ def coverage_requirements(metadata, profile='compact'):
                     'Observed vector bytes / dtype bytes; generated code must remain VL agnostic' if unit else
                     'Generic test sizes; actual SVE lane count unavailable',
                     lengths=sorted({n for v in units for n in boundary_lengths(v, profile=profile)}),
+                    tail_lengths=sorted({n for v in units for n in boundary_lengths(v, profile=profile)
+                                         if n % 4 != 0}),
                     layout_lengths=sorted({v + max(1, v // 2) for v in units}) if profile == 'compact' else None,
                     layouts=['contiguous', 'unit_stride', 'strided'] if len(tensor['shape']) > 1 else ['contiguous', 'unit_stride']))
     return dict(profile=profile, axes=axes, unassessed_inputs=unassessed,
