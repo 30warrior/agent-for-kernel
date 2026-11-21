@@ -27,7 +27,10 @@ For constrained parameterized models vary legal batch/spatial sizes or just inpu
 Cover mixed signs and tails only where the reference contract permits them. Do not insert NaNs or infinities.
 All proposed cases must run successfully on the reference model before freezing. Invalid cases return errors for repair.
 The suite is generated ONCE before candidate evaluation; never add/remove cases in response to candidate failures.
-Only propose additional input tensors within the supplied total byte budget; the original dataset is retained unchanged.
+If total_additional_input_bytes_limit is null, there is no aggregate byte cap for generated inputs;
+still choose practical sizes that fit the host memory and let the reference validator reject allocations
+that cannot be materialized. If a positive limit is supplied, keep the generated inputs within that limit.
+The original dataset is retained unchanged. The tool enforces the selected policy before reference execution.
 Submit exactly 15 additional cases, even when boundary/layout coverage is partial.
 Once a valid reference suite of exactly 15 cases is materialized, it is frozen.
 Partial coverage does not trigger a repair loop or a missing-items report, under either profile.
@@ -107,9 +110,10 @@ def build_input(base, descriptor, remaining):
         if set(descriptor) != {"kind"}:
             raise ValueError("copy accepts only kind")
         def clone(tensor):
-            remaining[0] -= tensor.numel() * tensor.element_size()
-            if remaining[0] < 0:
-                raise ValueError("Additional test inputs exceed test-suite-max-mib")
+            if remaining[0] is not None:
+                remaining[0] -= tensor.numel() * tensor.element_size()
+                if remaining[0] < 0:
+                    raise ValueError("Additional test inputs exceed the configured test-suite-max-mib")
             return tensor.detach().clone(memory_format=torch.preserve_format)
         return map_tree(base, clone)
     if kind == "scalar":
@@ -124,9 +128,10 @@ def build_input(base, descriptor, remaining):
     shape = descriptor.get("shape")
     if not isinstance(shape, list) or len(shape) > 16 or any(type(n) is not int or n < 0 for n in shape):
         raise ValueError("shape must be a list of nonnegative integers")
-    remaining[0] -= math.prod(shape) * base.element_size()
-    if remaining[0] < 0:
-        raise ValueError("Additional test inputs exceed test-suite-max-mib")
+    if remaining[0] is not None:
+        remaining[0] -= math.prod(shape) * base.element_size()
+        if remaining[0] < 0:
+            raise ValueError("Additional test inputs exceed the configured test-suite-max-mib")
     distribution = descriptor.get("distribution")
     options = dict(dtype=base.dtype, device=base.device)
     if distribution in ("zeros", "ones"):
@@ -241,7 +246,7 @@ def freeze_suite(reference, spec, folder, settings):
     preflight_spec(reference, spec)
     original_count = len(reference.cases)
     cases, expected, mutations, labels = [], [], [], []
-    remaining = [int(settings.test_suite_max_mib * 2**20)]
+    remaining = [None if settings.test_suite_max_mib is None else int(settings.test_suite_max_mib * 2**20)]
     for index, case in enumerate(spec["cases"]):
         try:
             if case["base_case"] >= original_count:
@@ -331,7 +336,12 @@ def generate_suite(task, reference, folder, settings, llm, materialize):
                   minimum_additional_cases=suite_limits(settings)[0],
                   maximum_additional_cases=suite_limits(settings)[1],
                   coverage_requirements=coverage_requirements(reference.metadata, getattr(settings, 'test_coverage', 'compact')),
-                  total_additional_input_bytes_limit=int(settings.test_suite_max_mib * 2**20))
+                  total_additional_input_bytes_limit=(None if settings.test_suite_max_mib is None
+                                                      else int(settings.test_suite_max_mib * 2**20)),
+                  test_suite_memory_policy=("unlimited aggregate generated-input budget; practical host-memory "
+                                            "usage and reference materialization still apply"
+                                            if settings.test_suite_max_mib is None else
+                                            f"aggregate generated-input budget: {int(settings.test_suite_max_mib * 2**20)} bytes"))
     (folder / "test_generation_prompt.json").write_text(json.dumps(prompt, indent=2), encoding="utf-8")
     (folder / "test_generation_instructions.txt").write_text(instructions, encoding="utf-8")
     agent = Agent(name="TestingAgent", model=llm.model, instructions=instructions,

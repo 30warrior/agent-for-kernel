@@ -50,8 +50,8 @@ def build_parser():
                         help="Compatibility option: the fixed additional-case count is 15")
     parser.add_argument('--test-coverage', choices=('compact', 'full'), default='compact',
                         help='Compact boundary/layout coverage by default; full tests every boundary in every layout')
-    parser.add_argument("--test-suite-max-mib", type=float, default=512,
-                        help="Additional input storage budget; never resizes original dataset cases")
+    parser.add_argument("--test-suite-max-mib", type=float, default=None,
+                        help="Optional aggregate storage budget for generated inputs; omitted means unlimited")
     parser.add_argument("--test-spec", help="Replay a saved test suite JSON instead of model test generation")
     parser.add_argument("--manifest", help="JSON task list; runs complete workflows serially")
     parser.add_argument("--result-file", help=argparse.SUPPRESS)
@@ -64,8 +64,10 @@ def execute_task(args, parser):
         parser.error("--threads must be positive")
     if args.perf_repeats < 1 or not math.isfinite(args.perf_batch_mib) or args.perf_batch_mib <= 0:
         parser.error("perf-repeats and perf-batch-mib must be positive and finite")
-    if args.extra_test_cases < 2 or not math.isfinite(args.test_suite_max_mib) or args.test_suite_max_mib <= 0:
-        parser.error("extra-test-cases must be at least two and test-suite-max-mib must be positive and finite")
+    if args.extra_test_cases < 2:
+        parser.error("extra-test-cases must be at least two")
+    if args.test_suite_max_mib is not None and (not math.isfinite(args.test_suite_max_mib) or args.test_suite_max_mib <= 0):
+        parser.error("test-suite-max-mib must be positive and finite when supplied")
     if args.max_iterations < 0 or args.trials < 1 or args.warmup < 0:
         parser.error("max-iterations/warmup must be nonnegative and trials positive")
     if args.compile_timeout <= 0 or args.execution_timeout <= 0 or args.max_agent_turns < 1:
