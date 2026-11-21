@@ -31,6 +31,10 @@ If total_additional_input_bytes_limit is null, there is no aggregate byte cap fo
 still choose practical sizes that fit the host memory and let the reference validator reject allocations
 that cannot be materialized. If a positive limit is supplied, keep the generated inputs within that limit.
 The original dataset is retained unchanged. The tool enforces the selected policy before reference execution.
+For tasks with very large original tensors, do not duplicate the original full shape across the suite:
+use smaller legal batch or spatial dimensions for most cases while preserving constructor-fixed and
+reduction dimensions, and include at most one original-scale case when representative performance is needed.
+Every generated case must remain practical to materialize, benchmark and profile independently.
 Submit exactly 15 additional cases, even when boundary/layout coverage is partial.
 Once a valid reference suite of exactly 15 cases is materialized, it is frozen.
 Partial coverage does not trigger a repair loop or a missing-items report, under either profile.
