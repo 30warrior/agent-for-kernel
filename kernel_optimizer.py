@@ -18,7 +18,8 @@ def build_parser():
     parser.add_argument("--threads", type=int, help="Maximum CPU threads; omitted means automatic per-case sizing")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--warmup", type=int, default=5)
-    parser.add_argument("--trials", type=int, default=30)
+    parser.add_argument("--trials", type=int, default=10,
+                        help="Benchmark repetitions per fixed input case (default: 10)")
     parser.add_argument("--generate-only", action="store_true", help="Generate v1 sources and expose compilation tools; makes LLM requests")
     parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
     parser.add_argument("--base-url", default=os.environ.get("OPENAI_BASE_URL"))
